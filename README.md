@@ -10,11 +10,12 @@ with no secret in its environment, then runs the binary directly in the next, wi
 alone:
 
 ```sh
-# Step 1, no secrets: the binary built, and where it is.
-bazel run --script_path="$RUNNER_TEMP/sign" @build_tools//:sign
-# Step 2, the release environment's secrets in this step's env alone: the binary itself, not Bazel.
-"$RUNNER_TEMP/sign" android --app storybook --pin <sha256> --java <java> --apksigner <apksigner.jar> \
-    --key-from-env in.apk out.apk
+# Step 1, no secrets: the binary built, and where it is (the binary itself, not `bazel run`'s wrapper script, which
+# sets BUILD_WORKSPACE_DIRECTORY as `bazel run` does).
+bazel build @build_tools//:sign
+echo "SIGN=$PWD/$(bazel cquery --output=files @build_tools//:sign 2>/dev/null)" >> "$GITHUB_ENV"
+# Step 2, the release environment's secrets in this step's env alone: the binary run directly.
+"$SIGN" android --app storybook --pin <sha256> --java <java> --apksigner <apksigner.jar> --key-from-env in.apk out.apk
 ```
 
 `sign` refuses `--key-from-env` when `bazel run` runs it (`BUILD_WORKSPACE_DIRECTORY` set), so the one-step form
