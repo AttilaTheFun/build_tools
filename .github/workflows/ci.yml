@@ -1,0 +1,22 @@
+# build_tools' CI: the package built and tested on Linux and on a Mac, for every pull request and main.
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    container: swift:6.4.2-noble@sha256:23d9b28ad97fb1cf1999edc3a0cb265ee915ed42299a9344e7173d5a6d2b05f4
+    steps:
+      - uses: actions/checkout@v5
+      - run: swift build --build-tests
+      - run: swift test --skip-build
+  macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - run: swift build --build-tests
+      - run: swift test --skip-build
