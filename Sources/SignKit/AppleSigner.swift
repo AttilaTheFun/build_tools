@@ -150,6 +150,10 @@ public struct AppleSigner: Sendable {
         let profilesFolder = file("profiles")
         try FileManager.default.createDirectory(atPath: profilesFolder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         for name in ["apple-profiles"] + (2...9).map({ "apple-profiles-\($0)" }) where has(name) {
+            // Only into profiles/: a member with an absolute path or a `..` refused before anything is unpacked (NCH).
+            let listed = try await tar.run(["-tf", file(name)])
+            guard listed.ok else { throw SignError("\(name) isn't a .tar or .tar.gz") }
+            if let stray = Self.strayMember(listed.output) { throw SignError("\(name) has a member outside its folder: \(stray)") }
             let unpacked = try await tar.run(["-xf", file(name), "-C", profilesFolder, "--no-same-owner"])
             guard unpacked.ok else { throw SignError("\(name) isn't a .tar or .tar.gz") }
         }
@@ -228,6 +232,13 @@ public struct AppleSigner: Sendable {
             }
         }
         return signed
+    }
+
+    /// The first of a tar's members (its `tar -t` listing) that would land outside the folder it's unpacked in.
+    static func strayMember(_ listing: String) -> String? {
+        listing.split(separator: "\n").map(String.init).first { member in
+            member.hasPrefix("/") || member.split(separator: "/", omittingEmptySubsequences: false).contains("..")
+        }
     }
 
     /// rcodesign's API key file (what `encode-app-store-connect-api-key` writes), made from the three secrets so the

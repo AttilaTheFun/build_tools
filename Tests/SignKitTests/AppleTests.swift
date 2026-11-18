@@ -200,3 +200,11 @@ private func makeBundle(_ path: URL, id: String, mac: Bool = false) throws {
     #expect(AppleSigner.validVariant("Production") && AppleSigner.validVariant("Alpha2"))
     for bad in ["", "2x", "a b", "Pro-duction", String(repeating: "a", count: 33)] { #expect(!AppleSigner.validVariant(bad), "\(bad)") }
 }
+
+@Test func aProfilesArchiveMemberOutsideItsFolderIsFound() {
+    #expect(AppleSigner.strayMember("./\n./a.mobileprovision\ninner/b.provisionprofile\n") == nil)
+    #expect(AppleSigner.strayMember("./a.mobileprovision\n../escape\n") == "../escape")
+    #expect(AppleSigner.strayMember("/etc/passwd\n") == "/etc/passwd")
+    #expect(AppleSigner.strayMember("inner/../../x\n") == "inner/../../x")
+    #expect(AppleSigner.strayMember("a..b.mobileprovision\n") == nil)
+}
