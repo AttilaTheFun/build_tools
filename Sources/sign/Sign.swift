@@ -71,7 +71,7 @@ struct Apple: AsyncParsableCommand {
                     line["size"] = output.size
                     lines += try JSONSerialization.data(withJSONObject: line, options: [.sortedKeys]) + Data("\n".utf8)
                 }
-                if !FileManager.default.fileExists(atPath: describe) { FileManager.default.createFile(atPath: describe, contents: nil) }
+                if !FileManager.default.fileExists(atPath: describe) { _ = FileManager.default.createFile(atPath: describe, contents: nil) }
                 guard let handle = FileHandle(forWritingAtPath: describe) else { throw SignError("\(describe) can't be written") }
                 try handle.seekToEnd()
                 try handle.write(contentsOf: lines)
