@@ -40,6 +40,11 @@ struct Android: AsyncParsableCommand {
     var output: String
 
     func run() async throws {
+        // Never through Bazel with the keys in the environment: its server and build event stream would have them.
+        if keyFromEnv, ProcessInfo.processInfo.environment["BUILD_WORKSPACE_DIRECTORY"] != nil {
+            throw ValidationError("--key-from-env isn't for `bazel run`, whose server and build events see the environment: "
+                                  + "build sign with no secrets set, then run the binary itself (README.md)")
+        }
         let source: AndroidSigner.Keys
         switch (keyFromEnv, keys) {
         case (true, nil): source = .environment

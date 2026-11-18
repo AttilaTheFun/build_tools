@@ -1,7 +1,8 @@
 // swift-tools-version: 6.2
 // build_tools: the build tools Logan's repositories share (isomer, playground, visor, shireworks), as executables a
-// repository runs through rules_swift_package_manager at a tagged version (`bazel run @build_tools//:sign -- …`),
-// built from source and cached (Logan, 2026-11-18: tools in Swift, not shell or Python; ~/Developer/AGENTS.md).
+// repository takes through rules_swift_package_manager at a tagged version, built from source and cached (Logan,
+// 2026-11-18: tools in Swift, not shell or Python; ~/Developer/AGENTS.md). A signer is built by Bazel with no secret in
+// the environment, then run directly with its keys: never `bazel run` with them (README.md).
 import PackageDescription
 
 let package = Package(
