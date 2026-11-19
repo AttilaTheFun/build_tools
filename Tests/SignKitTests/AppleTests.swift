@@ -221,3 +221,25 @@ private func makeBundle(_ path: URL, id: String, mac: Bool = false) throws {
     #expect(isTrue(read["get-task-allow"]) && !isTrue((read["nested"] as? [String: Any])?["flag"]))
     #expect(read["count"] as? Int == 3 && read["groups"] as? [String] == ["A.b", "C<d>"] && read["data"] as? Data == Data([1, 2, 3]))
 }
+
+/// What Foundation reads from a plist, written back: integers stay integers (UIDeviceFamily's 1 and 2, a 0), Bools
+/// stay Bools (NCH's review of #6: a number must never bridge into a Bool).
+@Test func aPlistReadAndWrittenAgainKeepsItsIntegersAndBools() throws {
+    let xml = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <plist version="1.0"><dict>
+    <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+    <key>Zero</key><integer>0</integer>
+    <key>One</key><integer>1</integer>
+    <key>Flag</key><true/>
+    <key>Off</key><false/>
+    <key>Real</key><real>2.5</real>
+    </dict></plist>
+    """
+    let read = try #require(try PropertyListSerialization.propertyList(from: Data(xml.utf8), format: nil) as? [String: Any])
+    let text = String(decoding: try PlistXML.data(read), as: UTF8.self)
+    #expect(text.contains("<key>UIDeviceFamily</key>\n\t<array>\n\t\t<integer>1</integer>\n\t\t<integer>2</integer>"), "\(text)")
+    #expect(text.contains("<key>Zero</key>\n\t<integer>0</integer>") && text.contains("<key>One</key>\n\t<integer>1</integer>"), "\(text)")
+    #expect(text.contains("<key>Flag</key>\n\t<true/>") && text.contains("<key>Off</key>\n\t<false/>"), "\(text)")
+    #expect(text.contains("<key>Real</key>\n\t<real>2.5</real>"), "\(text)")
+}

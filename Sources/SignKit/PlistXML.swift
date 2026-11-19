@@ -25,12 +25,18 @@ enum PlistXML {
         text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
     }
 
-    /// A Bool's value, where `value` is one (a CFBoolean on Apple's platforms, never a number that bridges to one).
+    /// A Bool's value, where `value` is one, decided by its type, never by bridging: a number read from a plist
+    /// (UIDeviceFamily's 1 and 2, any 0 or 1) bridges to a Bool where it's asked to be one (NCH's review of #6).
     static func boolean(_ value: Any) -> Bool? {
         #if canImport(Darwin)
         if let number = value as? NSNumber { return CFGetTypeID(number) == CFBooleanGetTypeID() ? number.boolValue : nil }
+        #else
+        // swift-corelibs-foundation: a Bool as itself, or an NSNumber made of one (its objCType "c"); never a number's.
+        if let number = value as? NSNumber, type(of: value) != Bool.self {
+            return String(cString: number.objCType) == "c" ? number.boolValue : nil
+        }
         #endif
-        return value as? Bool
+        return type(of: value) == Bool.self ? value as? Bool : nil
     }
 
     static func write(_ value: Any, into out: inout String, indent: String) throws {
