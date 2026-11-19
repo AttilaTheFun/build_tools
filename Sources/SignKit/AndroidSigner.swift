@@ -112,3 +112,35 @@ public struct AndroidSigner: Sendable {
         return digest
     }
 }
+
+extension AndroidSigner {
+    /// A signed APK's builds.json line, read by the repository's aapt2 (`dump badging`): its package as its bundle id,
+    /// its versionName and versionCode, its label as its name (else `name`); no executable UUID, no icon, and
+    /// `"urlSchemes": []`, as RELEASE_ASSETS.md's Android lines have.
+    public static func describe(_ apk: String, aapt2: String, name: String?, variant: String, commit: String?) async throws -> BuildDescription {
+        guard let data = FileManager.default.contents(atPath: apk) else { throw SignError("no APK at \(apk)") }
+        let dumped = try await Tool(aapt2).run(["dump", "badging", apk])
+        guard dumped.ok else { throw SignError("aapt2 couldn't read \(apk): \(dumped.error)") }
+        let badging = try badging(dumped.output)
+        return BuildDescription(file: (apk as NSString).lastPathComponent, bundleID: badging.package, app: name ?? badging.label ?? badging.package,
+                                platform: "android", version: badging.versionName, buildNumber: badging.versionCode, variant: variant,
+                                commit: BuildDescription.commit(commit), executableUUID: "", size: data.count,
+                                sha256: BuildDescription.sha256(data), icon: nil, urlSchemes: [])
+    }
+
+    /// `aapt2 dump badging`'s package line (`package: name='…' versionCode='…' versionName='…'`) and label.
+    static func badging(_ output: String) throws -> (package: String, versionCode: String, versionName: String, label: String?) {
+        func value(_ key: String, in line: Substring) -> String? {
+            guard let start = line.range(of: "\(key)='") else { return nil }
+            let rest = line[start.upperBound...]
+            return rest.firstIndex(of: "'").map { String(rest[..<$0]) }
+        }
+        let lines = output.split(separator: "\n")
+        guard let package = lines.first(where: { $0.hasPrefix("package:") }), let name = value("name", in: package) else {
+            throw SignError("aapt2 named no package")
+        }
+        let label = lines.first { $0.hasPrefix("application-label:") }.map { String($0.dropFirst("application-label:".count)).trimmingCharacters(in: CharacterSet(charactersIn: "'")) }
+            ?? lines.first { $0.hasPrefix("application:") }.flatMap { value("label", in: $0) }
+        return (name, value("versionCode", in: package) ?? "", value("versionName", in: package) ?? "", label.flatMap { $0.isEmpty ? nil : $0 })
+    }
+}

@@ -65,6 +65,8 @@ public struct AppleSigner: Sendable {
     /// A package whose platform's keys aren't here skipped, said, not refused (a public repository's release
     /// environment that holds one platform's keys alone).
     public let skipMissingKeys: Bool
+    /// The commit its builds are of, in their builds.json lines (else the job's, GITHUB_SHA).
+    public let commit: String?
     /// Each app's BuildVariant (its Info.plist's) set before it's signed, and a Mac app's stapled ticket taken out:
     /// how a published release makes its tested Alphas Production.
     public let variant: String?
@@ -72,7 +74,8 @@ public struct AppleSigner: Sendable {
     /// RELEASE_ASSETS.md), else each package's own name.
     public let app: String?
 
-    public init(rcodesign: String, dmg: String?, ipaKinds: [IPAKind], variant: String?, app: String?, skipMissingKeys: Bool = false) throws {
+    public init(rcodesign: String, dmg: String?, ipaKinds: [IPAKind], variant: String?, app: String?, skipMissingKeys: Bool = false,
+                commit: String? = nil) throws {
         guard !ipaKinds.isEmpty else { throw SignError("--ipa-kind names at least one kind") }
         guard FileManager.default.isExecutableFile(atPath: rcodesign) else { throw SignError("no rcodesign at \(rcodesign)") }
         if let dmg { guard FileManager.default.isExecutableFile(atPath: dmg) else { throw SignError("no dmg at \(dmg)") } }
@@ -82,6 +85,7 @@ public struct AppleSigner: Sendable {
         self.dmg = dmg.map(Tool.init)
         self.ipaKinds = ipaKinds
         self.skipMissingKeys = skipMissingKeys
+        self.commit = commit
         self.variant = variant
         self.app = app
     }
@@ -94,8 +98,8 @@ public struct AppleSigner: Sendable {
     /// What was made: each output's path and its builds.json line's values.
     public struct Signed: Sendable {
         public var path: String
-        public var line: [String: String]
-        public var size: Int
+        /// Its builds.json line.
+        public var description: BuildDescription
     }
 
     /// Every variable `environmentNames` lists, read and unset at once (before anything runs, so no process this starts
@@ -223,7 +227,7 @@ public struct AppleSigner: Sendable {
                 try? FileManager.default.removeItem(atPath: target)
                 let zipped = try await zip.run(["-qry", "-X", target, "."], in: folder)
                 guard zipped.ok else { throw SignError("\(base).ipa couldn't be zipped again: \(zipped.error)") }
-                signed.append(try described(target, info: info, platform: "ios"))
+                signed.append(Signed(path: target, description: try BuildDescription.apple(package: target, app: appPath, platform: "ios", name: app, commit: commit)))
             } else {
                 let apps = ((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []).filter { $0.hasSuffix(".app") }
                 guard apps.count == 1 else { throw SignError("\(base).zip holds \(apps.count) apps at its top, not one") }
@@ -239,7 +243,7 @@ public struct AppleSigner: Sendable {
                 try? FileManager.default.removeItem(atPath: target)
                 let zipped = try await zip.run(["-qry", "-X", target, apps[0]], in: folder)
                 guard zipped.ok else { throw SignError("\(base).zip couldn't be zipped again: \(zipped.error)") }
-                signed.append(try described(target, info: info, platform: "macos"))
+                signed.append(Signed(path: target, description: try BuildDescription.apple(package: target, app: appPath, platform: "macos", name: app, commit: commit)))
                 if let dmg {
                     let name = info["CFBundleDisplayName"] as? String ?? info["CFBundleName"] as? String ?? base
                     let image = (work as NSString).appendingPathComponent("image-\(base)")
@@ -256,7 +260,8 @@ public struct AppleSigner: Sendable {
                                                           + ["--for-notarization", disk])
                     guard signing.ok else { throw SignError("rcodesign couldn't sign the disk image:\n\(signing.output)\(signing.error)") }
                     try await notarize(disk, key: file("notary.json"))
-                    signed.append(try described(disk, info: info, platform: "macos"))
+                    let inImage = (image as NSString).appendingPathComponent(apps[0])
+                    signed.append(Signed(path: disk, description: try BuildDescription.apple(package: disk, app: inImage, platform: "macos", name: app, commit: commit)))
                 }
             }
         }
@@ -395,17 +400,36 @@ public struct AppleSigner: Sendable {
         return "\(app.replacingOccurrences(of: " ", with: "-"))-\(version)-\(platform).\(ext)"
     }
 
-    /// An output's builds.json line (RELEASE_ASSETS.md's fields this tool knows: the rest, a commit and an executable's
-    /// UUID, are the caller's).
-    func described(_ path: String, info: [String: Any], platform: String) throws -> Signed {
-        guard let data = FileManager.default.contents(atPath: path) else { throw SignError("\(path) wasn't written") }
-        var line = ["file": (path as NSString).lastPathComponent, "platform": platform,
-                    "bundleID": info["CFBundleIdentifier"] as? String ?? "",
-                    "version": info["CFBundleShortVersionString"] as? String ?? "",
-                    "buildNumber": info["CFBundleVersion"] as? String ?? "",
-                    "variant": info["BuildVariant"] as? String ?? "",
-                    "sha256": SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()]
-        if let app { line["app"] = app }
-        return Signed(path: path, line: line, size: data.count)
+    /// Packages copied into `out` as they were built, unsigned, each named as Applications reads it and described
+    /// (an experiment's from a branch, which gets no keys; Isomer's `run: experiment`): no keys, no stamp, its
+    /// variant whatever its bundle carries.
+    public func copyUnsigned(_ packages: [String], out: String) async throws -> [Signed] {
+        guard let unzip = Tool.find("unzip") else { throw SignError("unzip is needed on PATH") }
+        try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
+        let work = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("apple-unsigned-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: work, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(atPath: work) }
+        var copied: [Signed] = []
+        for package in packages.map({ URL(fileURLWithPath: $0).standardizedFileURL.path }) {
+            guard package.hasSuffix(".ipa") || package.hasSuffix(".zip") else {
+                throw SignError("\((package as NSString).lastPathComponent) is neither a Mac app's .zip nor an .ipa (--unsigned takes Apple packages alone)")
+            }
+            let base = ((package as NSString).lastPathComponent as NSString).deletingPathExtension
+            let folder = (work as NSString).appendingPathComponent("unpacked-\(base)")
+            try await unpack(package, into: folder, unzip: unzip)
+            let ios = package.hasSuffix(".ipa")
+            let parent = ios ? (folder as NSString).appendingPathComponent("Payload") : folder
+            let apps = ((try? FileManager.default.contentsOfDirectory(atPath: parent)) ?? []).filter { $0.hasSuffix(".app") }
+            guard apps.count == 1 else { throw SignError("\(base) holds \(apps.count) apps, not one") }
+            let appPath = (parent as NSString).appendingPathComponent(apps[0])
+            let info = AppleBundle.info(appPath) ?? [:]
+            let target = (out as NSString).appendingPathComponent(outputName(base: base, info: info, platform: ios ? "ios" : "macos", ext: ios ? "ipa" : "zip"))
+            try? FileManager.default.removeItem(atPath: target)
+            try FileManager.default.copyItem(atPath: package, toPath: target)
+            print("== \((target as NSString).lastPathComponent): copied unsigned")
+            copied.append(Signed(path: target, description: try BuildDescription.apple(package: target, app: appPath, platform: ios ? "ios" : "macos",
+                                                                                      name: app, commit: commit)))
+        }
+        return copied
     }
 }
