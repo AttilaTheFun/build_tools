@@ -43,6 +43,15 @@ struct Apple: AsyncParsableCommand {
     @Option(help: "A file each output's builds.json line is appended to, as one line of JSON.")
     var describe: String?
 
+    @Option(help: "builds.json: each output's line merged into its array (one for the same file replaced).")
+    var builds: String?
+
+    @Option(help: "The commit the builds are of, in their lines (default: GITHUB_SHA).")
+    var commit: String?
+
+    @Flag(help: "Copy the packages as built, unsigned (an experiment's, with no keys): named, described, not signed.")
+    var unsigned = false
+
     @Option(help: "Where the signed packages go.")
     var out: String
 
@@ -55,10 +64,12 @@ struct Apple: AsyncParsableCommand {
             throw ValidationError("--key-from-env isn't for `bazel run`, whose server and build events see the environment: "
                                   + "build sign with no secrets set, then run the binary itself (README.md)")
         }
-        let source: AppleSigner.Keys
-        switch (keyFromEnv, keys) {
-        case (true, nil): source = .environment
-        case (false, let folder?): source = .folder(folder)
+        var source: AppleSigner.Keys?
+        switch (keyFromEnv, keys, unsigned) {
+        case (false, nil, true): source = nil
+        case (true, nil, false): source = .environment
+        case (false, let folder?, false): source = .folder(folder)
+        case (_, _, true): throw ValidationError("--unsigned takes no keys")
         default: throw ValidationError("the keys come from one place: --key-from-env, or --keys <folder>")
         }
         let kinds = ipaKind.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.compactMap(AppleSigner.IPAKind.init(rawValue:))
@@ -66,27 +77,35 @@ struct Apple: AsyncParsableCommand {
             throw ValidationError("--ipa-kind is one or more of \(AppleSigner.IPAKind.allCases.map(\.rawValue).joined(separator: ", ")), comma-separated")
         }
         do {
-            let signer = try AppleSigner(rcodesign: rcodesign, dmg: dmg, ipaKinds: kinds, variant: variant, app: app, skipMissingKeys: skipMissingKeys)
-            let signed = try await signer.sign(packages, out: out, keys: source)
-            if let describe {
-                var lines = Data()
-                for output in signed {
-                    var line: [String: Any] = output.line
-                    line["size"] = output.size
-                    lines += try JSONSerialization.data(withJSONObject: line, options: [.sortedKeys]) + Data("\n".utf8)
-                }
-                if !FileManager.default.fileExists(atPath: describe) { _ = FileManager.default.createFile(atPath: describe, contents: nil) }
-                guard let handle = FileHandle(forWritingAtPath: describe) else { throw SignError("\(describe) can't be written") }
-                try handle.seekToEnd()
-                try handle.write(contentsOf: lines)
-                try handle.close()
+            let signer = try AppleSigner(rcodesign: rcodesign, dmg: dmg, ipaKinds: kinds, variant: variant, app: app,
+                                         skipMissingKeys: skipMissingKeys, commit: commit)
+            let signed: [AppleSigner.Signed]
+            if let source {
+                signed = try await signer.sign(packages, out: out, keys: source)
+            } else {
+                signed = try await signer.copyUnsigned(packages, out: out)
             }
-            for output in signed { print("Signed: \((output.path as NSString).lastPathComponent)") }
+            try record(signed.map(\.description.object), describe: describe, builds: builds)
+            for output in signed { print("\(unsigned ? "Copied" : "Signed"): \((output.path as NSString).lastPathComponent)") }
         } catch let error as SignError {
             FileHandle.standardError.write(Data("sign apple: \(error)\n".utf8))
             throw ExitCode.failure
         }
     }
+}
+
+/// Lines written as asked: each appended to `describe` as a line of JSON, and merged into the `builds` array.
+func record(_ lines: [[String: Any]], describe: String?, builds: String?) throws {
+    if let describe {
+        var data = Data()
+        for line in lines { data += try JSONSerialization.data(withJSONObject: line, options: [.sortedKeys]) + Data("\n".utf8) }
+        if !FileManager.default.fileExists(atPath: describe) { _ = FileManager.default.createFile(atPath: describe, contents: nil) }
+        guard let handle = FileHandle(forWritingAtPath: describe) else { throw SignError("\(describe) can't be written") }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: data)
+        try handle.close()
+    }
+    if let builds { try BuildsFile.merge(lines, into: builds) }
 }
 
 /// `sign android`: an APK signed with its app's private release key, its certificate checked against the pin.
@@ -112,6 +131,24 @@ struct Android: AsyncParsableCommand {
     @Option(help: "A folder holding android-<app>-keystore and android-<app>-password (Shireworks' secrets-fetch).")
     var keys: String?
 
+    @Option(help: "The repository's own pinned aapt2, to describe the signed APK (its package, version and label).")
+    var aapt2: String?
+
+    @Option(help: "The app's name across platforms in its line (default: its label).")
+    var name: String?
+
+    @Option(help: "Its line's variant: the channel its signing was decided as (Production for a release's, Alpha for main's).")
+    var variant: String = "Alpha"
+
+    @Option(help: "A file the signed APK's builds.json line is appended to, as one line of JSON (needs --aapt2).")
+    var describe: String?
+
+    @Option(help: "builds.json: the signed APK's line merged into its array (needs --aapt2).")
+    var builds: String?
+
+    @Option(help: "The commit it's of, in its line (default: GITHUB_SHA).")
+    var commit: String?
+
     @Argument(help: "The release build, zipaligned.")
     var input: String
 
@@ -134,6 +171,11 @@ struct Android: AsyncParsableCommand {
             let signer = try AndroidSigner(app: app, pin: pin, java: java, apksigner: apksigner)
             let certificate = try await signer.sign(input, to: output, keys: source)
             print("Signed: \((output as NSString).lastPathComponent) (\(app)'s release key, certificate \(certificate))")
+            if describe != nil || builds != nil {
+                guard let aapt2 else { throw SignError("--describe and --builds read the APK with --aapt2 <the repository's aapt2>") }
+                let line = try await AndroidSigner.describe(output, aapt2: aapt2, name: name, variant: variant, commit: commit)
+                try record([line.object], describe: describe, builds: builds)
+            }
         } catch let error as SignError {
             FileHandle.standardError.write(Data("sign android: \(error)\n".utf8))
             throw ExitCode.failure

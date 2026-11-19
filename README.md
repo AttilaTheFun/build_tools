@@ -30,7 +30,8 @@ repository's GitHub environment secrets, each read once and unset) or from a fol
 secret service), are written to a private tmpfs folder alone, are never on a command line, and are removed however the
 tool ends.
 
-- `sign android`: an APK signed with APK Signature Schemes v2 and v3 by the repository's own pinned apksigner, then
+- `sign android` (with `--aapt2 <the repository's aapt2>`, `--describe` and `--builds` as `sign apple`'s: its
+  package, versionName, versionCode, label or `--name`, `--variant`, `"urlSchemes": []`): an APK signed with APK Signature Schemes v2 and v3 by the repository's own pinned apksigner, then
   verified as Android verifies it, and refused unless its one certificate is the pinned one.
 - `sign apple` (its options below; `--ipa-kind ad-hoc,development` tries each kind in order, the first with its
   identity here and a profile for every bundle; `--skip-missing-keys` skips, saying so on standard error and in the
@@ -47,7 +48,13 @@ tool ends.
     its entitlements made the profile's; every other piece of code with the same identity, deepest first.
   - `--variant Production` sets each app's BuildVariant first (a published release promoting its Alphas); `--app
     <App>` names outputs `<App>-<version>-<platform>.<ext>`; `--describe <file>` appends each output's builds.json
-    line (file, app, bundleID, platform, version, buildNumber, variant, size, sha256) as a line of JSON.
+    line as a line of JSON, and `--builds <builds.json>` merges it into that array (an earlier line for the same file
+    replaced): file, app, bundleID, platform, version, buildNumber, variant (the bundle's BuildVariant, else Alpha),
+    commit (`--commit`, else GITHUB_SHA), executableUUID (its executable's LC_UUID, the arm64 slice of a fat one),
+    size, sha256, urlSchemes where it has some, and for a Mac app `icon` (`<App>-<version>-icon.png`, the largest PNG
+    in its .icns, written beside it), as shireworks' docs/RELEASE_ASSETS.md has them.
+  - `--unsigned` (an experiment's, from a branch with no keys): each Apple package copied out as built, named and
+    described the same way, not signed or stamped.
   - Keys by their secrets' names (`--keys`, Shireworks' secret service), or from these variables (`--key-from-env`):
 
     | Secret | Variable | Needed for |
