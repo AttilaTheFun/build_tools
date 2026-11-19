@@ -35,7 +35,7 @@ public enum TestsProof {
         let suite = try! NSRegularExpression(pattern: #"Test Suite '(All|Selected) tests' (passed|failed) at "#)
         // Swift Testing: its run's line, and each test that failed.
         let run = try! NSRegularExpression(pattern: #"Test run with (\d+) tests?(?: in \d+ suites?)? (passed|failed)"#)
-        let failed = try! NSRegularExpression(pattern: #"✘ Test (.+?) failed"#)
+        let failed = try! NSRegularExpression(pattern: #"✘ Test (.+?) failed after "#)
         var failedTests = Set<String>()
         var swiftTestingFailed = false
         func groups(_ regex: NSRegularExpression, _ line: String) -> [String]? {
