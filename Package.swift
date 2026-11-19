@@ -13,6 +13,8 @@ let package = Package(
         .executable(name: "sign", targets: ["sign"]),
         // A proof's comparison with the release before's (proof-diff.json), as Reviews reads it.
         .executable(name: "proof-diff", targets: ["proof-diff"]),
+        // A repository's proof of its tests' results, when it has no apps.
+        .executable(name: "tests-proof", targets: ["tests-proof"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", exact: "1.8.2"),
@@ -44,6 +46,9 @@ let package = Package(
             ]),
         .executableTarget(
             name: "proof-diff",
+            dependencies: ["ProofKit", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
+        .executableTarget(
+            name: "tests-proof",
             dependencies: ["ProofKit", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
         .testTarget(name: "ProofKitTests", dependencies: ["ProofKit"]),
     ],
