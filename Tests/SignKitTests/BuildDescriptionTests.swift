@@ -84,3 +84,12 @@ private let uuidText = "10111213-1415-1617-1819-1A1B1C1D1E1F"
                                    size: 1, sha256: "x", icon: nil, urlSchemes: []).object
     #expect(android["urlSchemes"] as? [String] == [] && android["icon"] == nil)
 }
+
+@Test func anUnsignedBuildsLineSaysSo() {
+    var description = BuildDescription(file: "Lab-1-ios.ipa", bundleID: "com.example.Lab", app: "Lab", platform: "ios", version: "1",
+                                       buildNumber: "1", variant: "AdHoc", commit: "", executableUUID: "", size: 1, sha256: "x",
+                                       icon: nil, urlSchemes: [])
+    #expect(description.object["signed"] == nil)
+    description.signed = false
+    #expect(description.object["signed"] as? Bool == false && description.object["variant"] as? String == "AdHoc")
+}

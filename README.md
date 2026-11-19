@@ -54,7 +54,8 @@ tool ends.
     size, sha256, urlSchemes where it has some, and for a Mac app `icon` (`<App>-<version>-icon.png`, the largest PNG
     in its .icns, written beside it), as shireworks' docs/RELEASE_ASSETS.md has them.
   - `--unsigned` (an experiment's, from a branch with no keys): each Apple package copied out as built, named and
-    described the same way, not signed or stamped.
+    described the same way, not signed or stamped: its line's variant `AdHoc` and `"signed": false`, which Applications
+    lists only in an experiment's release (`adhoc-…`).
   - Keys by their secrets' names (`--keys`, Shireworks' secret service), or from these variables (`--key-from-env`):
 
     | Secret | Variable | Needed for |

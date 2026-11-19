@@ -19,6 +19,9 @@ public struct BuildDescription: Sendable {
     /// A Mac app's icon's file, beside it (`<App>-<version>-icon.png`).
     public var icon: String?
     public var urlSchemes: [String]
+    /// False for a build copied unsigned (`--unsigned`, an experiment's): its line says `"signed": false`, and
+    /// Applications lists such a line only in an experiment's release, never as an app's Alpha (NCH, #8's review).
+    public var signed: Bool = true
 
     /// Its line, as builds.json holds it: `urlSchemes` only where it has some (an Android app's always), `icon`
     /// only where there is one.
@@ -27,6 +30,7 @@ public struct BuildDescription: Sendable {
                                    "buildNumber": buildNumber, "variant": variant, "commit": commit, "executableUUID": executableUUID,
                                    "size": size, "sha256": sha256]
         if let icon { line["icon"] = icon }
+        if !signed { line["signed"] = false }
         if !urlSchemes.isEmpty || platform == "android" { line["urlSchemes"] = urlSchemes }
         return line
     }
