@@ -7,8 +7,13 @@ enum Inflate {
         let description: String
     }
 
-    /// `data` inflated; `raw`: a deflate stream with no zlib header (a zip entry's).
+    /// The most anything inflates to with no size said: 1 GiB.
+    static let limit = 1 << 30
+
+    /// `data` inflated; `raw`: a deflate stream with no zlib header (a zip entry's). Refused past `expected` and a
+    /// tenth (a zip entry's size, a PNG's rows), or `limit` with none: a damaged or hostile archive can't fill memory (NCH).
     static func inflate(_ data: Data, raw: Bool = false, expected: Int? = nil) throws -> Data {
+        let cap = expected.map { $0 + $0 / 10 + 1024 } ?? limit
         var stream = z_stream()
         guard inflateInit2_(&stream, raw ? -MAX_WBITS : MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
             throw Failed(description: "zlib couldn't start")
@@ -29,11 +34,12 @@ enum Inflate {
                     stream.avail_out = uInt(chunk)
                     let result = CZlib.inflate(&stream, Z_NO_FLUSH)
                     out.append(outputBuffer.baseAddress!, count: chunk - Int(stream.avail_out))
-                    return result
+                    return out.count > cap ? Z_BUF_ERROR : result
                 }
             } while result == Z_OK
             return result
         }
+        guard out.count <= cap else { throw Failed(description: "it inflates past \(cap) bytes") }
         guard status == Z_STREAM_END else { throw Failed(description: "the data isn't whole deflate (zlib \(status))") }
         return out
     }
