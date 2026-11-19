@@ -117,3 +117,9 @@ private func proofJSON(_ items: [[String: Any]], version: String = "0.2.0") thro
     #expect(ProofDiff.baseRelease(listed, below: nil, prefix: "v", tag: "v0.12.2")?["id"] as? Int == 1)
     #expect(ProofDiff.baseRelease(listed, below: nil, prefix: "v", tag: "v0.14.0") == nil, "a draft isn't a base")
 }
+
+@Test func inflatingStopsPastWhatWasSaid() throws {
+    let big = try Inflate.deflate(Data(repeating: 0, count: 100_000), raw: true)
+    #expect(try Inflate.inflate(big, raw: true, expected: 100_000).count == 100_000)
+    #expect(throws: Inflate.Failed.self) { try Inflate.inflate(big, raw: true, expected: 1_000) }
+}
