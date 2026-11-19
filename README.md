@@ -32,7 +32,9 @@ tool ends.
 
 - `sign android` (with `--aapt2 <the repository's aapt2>`, `--describe` and `--builds` as `sign apple`'s: its
   package, versionName, versionCode, label or `--name`, `--variant`, `"urlSchemes": []`): an APK signed with APK Signature Schemes v2 and v3 by the repository's own pinned apksigner, then
-  verified as Android verifies it, and refused unless its one certificate is the pinned one.
+  verified as Android verifies it, and refused unless its one certificate is the pinned one. `--out <folder>` in place
+  of the output path names it `<name or label>-<versionName>-android.apk` from the APK itself (with `--aapt2`);
+  `--skip-missing-keys` skips, saying so as `sign apple` does, when its key isn't here.
 - `sign apple` (its options below; `--ipa-kind ad-hoc,development` tries each kind in order, the first with its
   identity here and a profile for every bundle; `--skip-missing-keys` skips, saying so on standard error and in the
   job's summary, a package whose platform's keys aren't here; apple-profiles is needed for an iPhone app, and for a
@@ -51,11 +53,12 @@ tool ends.
     line as a line of JSON, and `--builds <builds.json>` merges it into that array (an earlier line for the same file
     replaced): file, app, bundleID, platform, version, buildNumber, variant (the bundle's BuildVariant, else Alpha),
     commit (`--commit`, else GITHUB_SHA), executableUUID (its executable's LC_UUID, the arm64 slice of a fat one),
-    size, sha256, urlSchemes where it has some, and for a Mac app `icon` (`<App>-<version>-icon.png`, the largest PNG
-    in its .icns, written beside it), as shireworks' docs/RELEASE_ASSETS.md has them.
+    size, sha256, urlSchemes where it has some, and for a Mac app's .zip `icon` (`<App>-<version>-icon.png`, the
+    largest PNG in its .icns, written beside it; its disk image's line has none), as shireworks' docs/RELEASE_ASSETS.md
+    has them. builds.json is written pretty-printed, its keys sorted.
   - `--unsigned` (an experiment's, from a branch with no keys): each Apple package copied out as built, named and
     described the same way, not signed or stamped: its line's variant `AdHoc` and `"signed": false`, which Applications
-    lists only in an experiment's release (`adhoc-…`).
+    lists only in an experiment's release (`adhoc-…`). It runs no rcodesign, so it needs no `--rcodesign`.
   - Keys by their secrets' names (`--keys`, Shireworks' secret service), or from these variables (`--key-from-env`):
 
     | Secret | Variable | Needed for |

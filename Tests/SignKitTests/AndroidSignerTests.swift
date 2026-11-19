@@ -58,3 +58,19 @@ private let v2 = "Verifies\nVerified using v2 scheme (APK Signature Scheme v2): 
     folder.remove()
     #expect(!FileManager.default.fileExists(atPath: folder.path))
 }
+
+@Test func whetherAKeyIsHereIsToldWithNothingRead() throws {
+    // --skip-missing-keys: both of its secrets, in the environment or the folder; neither read nor unset.
+    let folder = try SecretsFolder(prefix: "build-tools-test")
+    defer { folder.remove() }
+    let apksigner = try folder.write("apksigner.jar", Data())
+    let signer = try AndroidSigner(app: "storybook", pin: pin, java: "/usr/bin/true", apksigner: apksigner)
+    #expect(!signer.hasKeys(.folder(folder.path)))
+    _ = try folder.write("android-storybook-keystore", Data("k".utf8))
+    #expect(!signer.hasKeys(.folder(folder.path)))
+    _ = try folder.write("android-storybook-password", Data("p".utf8))
+    #expect(signer.hasKeys(.folder(folder.path)))
+    #expect(!signer.hasKeys(.environment, environment: ["ANDROID_SIGNING_KEYSTORE": "a"]))
+    #expect(!signer.hasKeys(.environment, environment: ["ANDROID_SIGNING_KEYSTORE": "a", "ANDROID_SIGNING_PASSWORD": ""]))
+    #expect(signer.hasKeys(.environment, environment: ["ANDROID_SIGNING_KEYSTORE": "a", "ANDROID_SIGNING_PASSWORD": "b"]))
+}
