@@ -11,6 +11,8 @@ let package = Package(
     products: [
         // Signing a build with its release keys, in its CI job: an Android app, a Mac app or an iPhone app.
         .executable(name: "sign", targets: ["sign"]),
+        // A proof's comparison with the release before's (proof-diff.json), as Reviews reads it.
+        .executable(name: "proof-diff", targets: ["proof-diff"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", exact: "1.8.2"),
@@ -32,6 +34,18 @@ let package = Package(
             name: "sign",
             dependencies: ["SignKit", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
         .testTarget(name: "SignKitTests", dependencies: ["SignKit"]),
+        // zlib, the system's (a PNG's pixels, a zip's entries): Linux has no Compression.
+        .systemLibrary(name: "CZlib", providers: [.apt(["zlib1g-dev"]), .brew(["zlib"])]),
+        .target(
+            name: "ProofKit",
+            dependencies: [
+                "CZlib",
+                .product(name: "Crypto", package: "swift-crypto"),
+            ]),
+        .executableTarget(
+            name: "proof-diff",
+            dependencies: ["ProofKit", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
+        .testTarget(name: "ProofKitTests", dependencies: ["ProofKit"]),
     ],
     swiftLanguageModes: [.v6]
 )
