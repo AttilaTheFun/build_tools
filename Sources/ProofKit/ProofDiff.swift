@@ -105,10 +105,17 @@ public enum ProofDiff {
         picked(item, ["sha256", "width", "height", "result", "tests", "failures"])
     }
 
+    /// Two JSON values alike (what JSONSerialization reads: strings, numbers, booleans, null, arrays, objects).
     static func same(_ a: Any?, _ b: Any?) -> Bool {
         switch (a, b) {
         case (nil, nil): return true
-        case let (a?, b?): return (a as AnyObject).isEqual(b as AnyObject)
+        case (nil, _), (_, nil): return false
+        case let (a as String, b as String): return a == b
+        case let (a as [Any], b as [Any]): return a.count == b.count && zip(a, b).allSatisfy { same($0, $1) }
+        case let (a as [String: Any], b as [String: Any]):
+            return a.count == b.count && a.allSatisfy { key, value in b[key].map { same(value, $0) } ?? false }
+        case (is NSNull, is NSNull): return true
+        case let (a as NSNumber, b as NSNumber): return a == b
         default: return false
         }
     }
@@ -193,7 +200,7 @@ public enum ProofDiff {
 
     /// The release before (as Reviews takes it): of the published, not pre-release releases whose tag's version is
     /// below `below`, the one published last; or the one named `tag`.
-    static func baseRelease(_ listed: [[String: Any]], below: [Int]?, prefix: String, tag: String? = nil) -> [String: Any]? {
+    public static func baseRelease(_ listed: [[String: Any]], below: [Int]?, prefix: String, tag: String? = nil) -> [String: Any]? {
         var candidates: [(String, [String: Any])] = []
         for release in listed {
             if release["draft"] as? Bool == true || release["prerelease"] as? Bool == true { continue }
@@ -212,7 +219,7 @@ public enum ProofDiff {
     static func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
     /// The base's description and its proof, or a note why there's none.
-    static func base(for proof: Proof, in repository: String, prefix: String, tag: String? = nil, listed known: [[String: Any]]? = nil,
+    public static func base(for proof: Proof, in repository: String, prefix: String, tag: String? = nil, listed known: [[String: Any]]? = nil,
                      github: GitHub) async -> (base: [String: Any]?, proof: Proof?, note: String?) {
         var listed: [[String: Any]] = known ?? []
         if known == nil {
