@@ -22,8 +22,8 @@ struct Apple: AsyncParsableCommand {
     @Option(help: "A folder holding the keys by their secrets' names (Shireworks' secrets-fetch).")
     var keys: String?
 
-    @Option(help: "The repository's own pinned rcodesign.")
-    var rcodesign: String
+    @Option(help: "The repository's own pinned rcodesign (not for --unsigned, which runs none).")
+    var rcodesign: String?
 
     @Option(help: "A disk image beside each Mac app, made by this dmg (rules_applecross', pinned by the repository).")
     var dmg: String?
@@ -72,6 +72,7 @@ struct Apple: AsyncParsableCommand {
         case (_, _, true): throw ValidationError("--unsigned takes no keys")
         default: throw ValidationError("the keys come from one place: --key-from-env, or --keys <folder>")
         }
+        if !unsigned, rcodesign == nil { throw ValidationError("signing needs --rcodesign <the repository's rcodesign>") }
         let kinds = ipaKind.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.compactMap(AppleSigner.IPAKind.init(rawValue:))
         guard !kinds.isEmpty, kinds.count == ipaKind.split(separator: ",").count else {
             throw ValidationError("--ipa-kind is one or more of \(AppleSigner.IPAKind.allCases.map(\.rawValue).joined(separator: ", ")), comma-separated")
@@ -149,11 +150,26 @@ struct Android: AsyncParsableCommand {
     @Option(help: "The commit it's of, in its line (default: GITHUB_SHA).")
     var commit: String?
 
+    @Flag(help: "Skip, saying so, when the key isn't here, rather than refusing.")
+    var skipMissingKeys = false
+
+    @Option(help: "A folder the signed APK goes into, named <name or label>-<versionName>-android.apk (needs --aapt2), in place of <output>.")
+    var out: String?
+
     @Argument(help: "The release build, zipaligned.")
     var input: String
 
-    @Argument(help: "Where the signed APK goes.")
-    var output: String
+    @Argument(help: "Where the signed APK goes (or --out <folder>).")
+    var output: String?
+
+    func validate() throws {
+        switch (output, out) {
+        case (nil, nil): throw ValidationError("where the signed APK goes: <output>, or --out <folder>")
+        case (_?, _?): throw ValidationError("<output> or --out <folder>, not both")
+        case (nil, _?) where aapt2 == nil: throw ValidationError("--out names the APK from its versionName: it needs --aapt2 <the repository's aapt2>")
+        default: break
+        }
+    }
 
     func run() async throws {
         // Never through Bazel with the keys in the environment: its server and build event stream would have them.
@@ -169,12 +185,34 @@ struct Android: AsyncParsableCommand {
         }
         do {
             let signer = try AndroidSigner(app: app, pin: pin, java: java, apksigner: apksigner)
-            let certificate = try await signer.sign(input, to: output, keys: source)
-            print("Signed: \((output as NSString).lastPathComponent) (\(app)'s release key, certificate \(certificate))")
-            if describe != nil || builds != nil {
-                guard let aapt2 else { throw SignError("--describe and --builds read the APK with --aapt2 <the repository's aapt2>") }
-                let line = try await AndroidSigner.describe(output, aapt2: aapt2, name: name, variant: variant, commit: commit)
-                try record([line.object], describe: describe, builds: builds)
+            if skipMissingKeys, !signer.hasKeys(source) {
+                AppleSigner.skipped("\(app) skipped: its key isn't here", command: "sign android")
+                return
+            }
+            if describe != nil || builds != nil, aapt2 == nil {
+                throw SignError("--describe and --builds read the APK with --aapt2 <the repository's aapt2>")
+            }
+            let path: String, certificate: String
+            var line: BuildDescription?
+            if let out, let aapt2 {
+                // Signed beside where it goes, then named from what it is.
+                let signing = (out as NSString).appendingPathComponent(".sign-android-\(app).apk")
+                defer { try? FileManager.default.removeItem(atPath: signing) }
+                certificate = try await signer.sign(input, to: signing, keys: source)
+                var described = try await AndroidSigner.describe(signing, aapt2: aapt2, name: name, variant: variant, commit: commit)
+                described.file = BuildDescription.assetName(app: described.app, version: described.version, platform: "android", ext: "apk")
+                path = (out as NSString).appendingPathComponent(described.file)
+                try? FileManager.default.removeItem(atPath: path)
+                try FileManager.default.moveItem(atPath: signing, toPath: path)
+                line = described
+            } else {
+                path = output ?? ""
+                certificate = try await signer.sign(input, to: path, keys: source)
+            }
+            print("Signed: \((path as NSString).lastPathComponent) (\(app)'s release key, certificate \(certificate))")
+            if describe != nil || builds != nil, let aapt2 {
+                if line == nil { line = try await AndroidSigner.describe(path, aapt2: aapt2, name: name, variant: variant, commit: commit) }
+                try record([line!.object], describe: describe, builds: builds)
             }
         } catch let error as SignError {
             FileHandle.standardError.write(Data("sign android: \(error)\n".utf8))

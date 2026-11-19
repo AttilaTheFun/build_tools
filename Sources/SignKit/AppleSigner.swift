@@ -57,7 +57,14 @@ public struct AppleSigner: Sendable {
         ("apple-profiles", "APPLE_PROFILES", true),
     ] + (2...9).map { ("apple-profiles-\($0)", "APPLE_PROFILES_\($0)", true) }
 
-    public let rcodesign: Tool
+    /// The repository's rcodesign; nil for `--unsigned`, which runs none.
+    let rcodesignTool: Tool?
+    var rcodesign: Tool {
+        get throws {
+            guard let rcodesignTool else { throw SignError("signing needs --rcodesign <the repository's rcodesign>") }
+            return rcodesignTool
+        }
+    }
     public let dmg: Tool?
     /// The kinds an iPhone app may be signed as, in order: the first whose identity is here and that has a profile
     /// for each of its bundles (`ad-hoc,development`: ad hoc where the distribution identity is, else development).
@@ -74,14 +81,14 @@ public struct AppleSigner: Sendable {
     /// RELEASE_ASSETS.md), else each package's own name.
     public let app: String?
 
-    public init(rcodesign: String, dmg: String?, ipaKinds: [IPAKind], variant: String?, app: String?, skipMissingKeys: Bool = false,
+    public init(rcodesign: String?, dmg: String?, ipaKinds: [IPAKind], variant: String?, app: String?, skipMissingKeys: Bool = false,
                 commit: String? = nil) throws {
         guard !ipaKinds.isEmpty else { throw SignError("--ipa-kind names at least one kind") }
-        guard FileManager.default.isExecutableFile(atPath: rcodesign) else { throw SignError("no rcodesign at \(rcodesign)") }
+        if let rcodesign { guard FileManager.default.isExecutableFile(atPath: rcodesign) else { throw SignError("no rcodesign at \(rcodesign)") } }
         if let dmg { guard FileManager.default.isExecutableFile(atPath: dmg) else { throw SignError("no dmg at \(dmg)") } }
         if let variant { guard Self.validVariant(variant) else { throw SignError("--variant is a word (Production, Alpha…)") } }
         if let app { guard !app.isEmpty, !app.contains("/") else { throw SignError("--app is the app's name") } }
-        self.rcodesign = Tool(rcodesign)
+        self.rcodesignTool = rcodesign.map(Tool.init)
         self.dmg = dmg.map(Tool.init)
         self.ipaKinds = ipaKinds
         self.skipMissingKeys = skipMissingKeys
@@ -123,6 +130,7 @@ public struct AppleSigner: Sendable {
 
     /// Signs each package into `out`.
     public func sign(_ packages: [String], out: String, keys: Keys) async throws -> [Signed] {
+        _ = try rcodesign
         let packages = packages.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
         for package in packages {
             guard FileManager.default.fileExists(atPath: package) else { throw SignError("no such file: \(package)") }
@@ -261,7 +269,8 @@ public struct AppleSigner: Sendable {
                     guard signing.ok else { throw SignError("rcodesign couldn't sign the disk image:\n\(signing.output)\(signing.error)") }
                     try await notarize(disk, key: file("notary.json"))
                     let inImage = (image as NSString).appendingPathComponent(apps[0])
-                    signed.append(Signed(path: disk, description: try BuildDescription.apple(package: disk, app: inImage, platform: "macos", name: app, commit: commit)))
+                    signed.append(Signed(path: disk, description: try BuildDescription.apple(package: disk, app: inImage, platform: "macos", name: app,
+                                                                                               commit: commit, icon: false)))
                 }
             }
         }
@@ -347,7 +356,7 @@ public struct AppleSigner: Sendable {
     /// A bundle's steps for a profile `kind` (refused, saying why, where none fits).
     func plan(_ app: String, platform: ApplePlan.Platform, kind: AppleProfile.Kind, certificate: String, profiles: [AppleProfile]) async throws
         -> [ApplePlan.Step] {
-        let rcodesign = rcodesign
+        let rcodesign = try self.rcodesign
         return try await ApplePlan.steps(app: app, platform: platform, profiles: profiles, certificate: certificate, kinds: [kind]) { code in
             let target = AppleBundle.isFolder(code) ? AppleBundle.executable(code) : code
             guard let target else { return [:] }
@@ -378,11 +387,11 @@ public struct AppleSigner: Sendable {
     }
 
     /// A skip said on standard error and, in a GitHub job, its summary.
-    static func skipped(_ what: String) {
-        FileHandle.standardError.write(Data("sign apple: \(what) (--skip-missing-keys)\n".utf8))
+    public static func skipped(_ what: String, command: String = "sign apple") {
+        FileHandle.standardError.write(Data("\(command): \(what) (--skip-missing-keys)\n".utf8))
         if let summary = ProcessInfo.processInfo.environment["GITHUB_STEP_SUMMARY"], let handle = FileHandle(forWritingAtPath: summary) {
             _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: Data("- sign apple: \(what)\n".utf8))
+            try? handle.write(contentsOf: Data("- \(command): \(what)\n".utf8))
             try? handle.close()
         }
     }

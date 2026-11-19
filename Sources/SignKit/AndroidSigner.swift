@@ -45,6 +45,18 @@ public struct AndroidSigner: Sendable {
         return hex.count == 64 && hex.allSatisfy(\.isHexDigit) ? hex : nil
     }
 
+    /// Whether its key is here (both of its secrets, set or in the folder), nothing read: `--skip-missing-keys`.
+    public func hasKeys(_ keys: Keys, environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        switch keys {
+        case .environment:
+            return ["ANDROID_SIGNING_KEYSTORE", "ANDROID_SIGNING_PASSWORD"].allSatisfy { !(environment[$0] ?? "").isEmpty }
+        case .folder(let path):
+            return ["keystore", "password"].allSatisfy {
+                FileManager.default.fileExists(atPath: (path as NSString).appendingPathComponent("android-\(app)-\($0)"))
+            }
+        }
+    }
+
     /// Signs `input` into `output`, its certificate checked against the pin: what the signed APK's certificate is.
     @discardableResult
     public func sign(_ input: String, to output: String, keys: Keys) async throws -> String {

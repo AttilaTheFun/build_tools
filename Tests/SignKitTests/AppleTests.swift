@@ -243,3 +243,10 @@ private func makeBundle(_ path: URL, id: String, mac: Bool = false) throws {
     #expect(text.contains("<key>Flag</key>\n\t<true/>") && text.contains("<key>Off</key>\n\t<false/>"), "\(text)")
     #expect(text.contains("<key>Real</key>\n\t<real>2.5</real>"), "\(text)")
 }
+
+@Test func copyingUnsignedNeedsNoRcodesignButSigningDoes() async throws {
+    // --unsigned runs no rcodesign, so it needs none (Isomer passed /usr/bin/true); signing still refuses without one.
+    let signer = try AppleSigner(rcodesign: nil, dmg: nil, ipaKinds: [.adHoc], variant: nil, app: nil)
+    await #expect(throws: SignError.self) { try await signer.sign([], out: NSTemporaryDirectory(), keys: .folder(NSTemporaryDirectory())) }
+    #expect(throws: SignError.self) { try AppleSigner(rcodesign: "/nonexistent/rcodesign", dmg: nil, ipaKinds: [.adHoc], variant: nil, app: nil) }
+}

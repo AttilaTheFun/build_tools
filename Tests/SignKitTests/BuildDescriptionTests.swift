@@ -57,6 +57,13 @@ private let uuidText = "10111213-1415-1617-1819-1A1B1C1D1E1F"
     #expect(line["urlSchemes"] as? [String] == ["lab"] && line["icon"] as? String == "Storybook-Lab-1.2.3-icon.png")
     #expect(FileManager.default.contents(atPath: root.appendingPathComponent("Storybook-Lab-1.2.3-icon.png").path) == Data(png))
     #expect(BuildDescription.assetName(app: "Storybook Lab", version: "1.2.3", platform: "ios", ext: "ipa") == "Storybook-Lab-1.2.3-ios.ipa")
+
+    // A disk image's line carries no icon: the .zip's alone does, as release_assets.sh had it (Isomer, 0.4.0's leftovers).
+    let disk = root.appendingPathComponent("Storybook-Lab-1.2.3-macos.dmg")
+    try Data("dmg".utf8).write(to: disk)
+    let diskLine = try BuildDescription.apple(package: disk.path, app: root.appendingPathComponent("Lab.app").path, platform: "macos",
+                                              name: "Storybook Lab", commit: "abc", icon: false).object
+    #expect(diskLine["icon"] == nil && diskLine["file"] as? String == "Storybook-Lab-1.2.3-macos.dmg")
 }
 
 @Test func buildsJSONIsMergedAFilesLineReplaced() throws {

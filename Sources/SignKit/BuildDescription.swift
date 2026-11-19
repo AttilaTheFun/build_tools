@@ -49,7 +49,9 @@ public struct BuildDescription: Sendable {
 
     /// An Apple app's line, its package at `path` and its bundle unpacked at `app`; a Mac app's icon written beside
     /// the package. `name`: the app's name across platforms (else its display name, its name, its id).
-    static func apple(package path: String, app bundle: String, platform: String, name: String?, commit: String?) throws -> BuildDescription {
+    /// `icon: false` for a disk image's line: the Mac app's .zip line alone carries it, as release_assets.sh had it.
+    static func apple(package path: String, app bundle: String, platform: String, name: String?, commit: String?,
+                      icon writesIcon: Bool = true) throws -> BuildDescription {
         guard let data = FileManager.default.contents(atPath: path) else { throw SignError("\(path) wasn't written") }
         let info = AppleBundle.info(bundle) ?? [:]
         guard let bundleID = info["CFBundleIdentifier"] as? String, !bundleID.isEmpty else {
@@ -63,7 +65,7 @@ public struct BuildDescription: Sendable {
                                            variant: (info["BuildVariant"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Alpha",
                                            commit: Self.commit(commit), executableUUID: AppleBundle.executable(bundle).flatMap(executableUUID) ?? "",
                                            size: data.count, sha256: sha256(data), icon: nil, urlSchemes: schemes)
-        if platform == "macos", let png = icon(of: bundle, info: info) {
+        if writesIcon, platform == "macos", let png = icon(of: bundle, info: info) {
             let iconName = assetName(app: app, version: version, platform: "icon", ext: "png")
             let iconPath = ((path as NSString).deletingLastPathComponent as NSString).appendingPathComponent(iconName)
             if (try? png.write(to: URL(fileURLWithPath: iconPath))) != nil { description.icon = iconName }
