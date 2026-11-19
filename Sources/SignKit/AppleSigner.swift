@@ -427,8 +427,12 @@ public struct AppleSigner: Sendable {
             try? FileManager.default.removeItem(atPath: target)
             try FileManager.default.copyItem(atPath: package, toPath: target)
             print("== \((target as NSString).lastPathComponent): copied unsigned")
-            copied.append(Signed(path: target, description: try BuildDescription.apple(package: target, app: appPath, platform: ios ? "ios" : "macos",
-                                                                                      name: app, commit: commit)))
+            var description = try BuildDescription.apple(package: target, app: appPath, platform: ios ? "ios" : "macos", name: app, commit: commit)
+            // An experiment's build: AdHoc (Applications' experiment variant), and unsigned, so never offered as an
+            // app's Alpha wherever its line lands (NCH).
+            description.variant = "AdHoc"
+            description.signed = false
+            copied.append(Signed(path: target, description: description))
         }
         return copied
     }
