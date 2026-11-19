@@ -10,10 +10,12 @@ with no secret in its environment, then runs the binary directly in the next, wi
 alone:
 
 ```sh
-# Step 1, no secrets: the binary built, and where it is (the binary itself, not `bazel run`'s wrapper script, which
-# sets BUILD_WORKSPACE_DIRECTORY as `bazel run` does).
-bazel build @build_tools//:sign
-echo "SIGN=$PWD/$(bazel cquery --output=files @build_tools//:sign 2>/dev/null)" >> "$GITHUB_ENV"
+# Step 1, no secrets: the binary built, and where it is. Through rules_swift_package_manager the label is
+# @swiftpkg_build_tools//:sign; cquery names two files (the binary, `sign.rspm.__impl`, and a link to it), relative to
+# the execution root. The binary itself, not `bazel run`'s wrapper script, which sets BUILD_WORKSPACE_DIRECTORY as
+# `bazel run` does.
+bazel build @swiftpkg_build_tools//:sign
+echo "SIGN=$(bazel info execution_root)/$(bazel cquery --output=files @swiftpkg_build_tools//:sign 2>/dev/null | grep '__impl$' | head -1)" >> "$GITHUB_ENV"
 # Step 2, the release environment's secrets in this step's env alone: the binary run directly.
 "$SIGN" android --app storybook --pin <sha256> --java <java> --apksigner <apksigner.jar> --key-from-env in.apk out.apk
 ```
@@ -30,7 +32,10 @@ tool ends.
 
 - `sign android`: an APK signed with APK Signature Schemes v2 and v3 by the repository's own pinned apksigner, then
   verified as Android verifies it, and refused unless its one certificate is the pinned one.
-- `sign apple`: Apple apps with no Mac, by the repository's own pinned rcodesign (and rules_applecross' `dmg`). Ported
+- `sign apple` (its options below; `--ipa-kind ad-hoc,development` tries each kind in order, the first with its
+  identity here and a profile for every bundle; `--skip-missing-keys` skips, saying so on standard error and in the
+  job's summary, a package whose platform's keys aren't here; apple-profiles is needed for an iPhone app, and for a
+  Mac app only where its entitlements need a profile): Apple apps with no Mac, by the repository's own pinned rcodesign (and rules_applecross' `dmg`). Ported
   from shireworks' tools/ci/apple_sign.sh and apple_profiles.py.
   - A Mac app's .zip (one .app at its top): Developer ID (hardened runtime, a timestamp), its Developer ID profile
     embedded and its entitlements made the profile's when there's one for it, notarized and stapled; with `--dmg
@@ -55,3 +60,19 @@ tool ends.
 
     A password-less .p12 has no password secret. A .p12 is as Keychain Access exports one (3DES): rcodesign can't
     open OpenSSL 3's default, so one re-wrapped needs `-legacy`. Needs unzip, zip, tar and openssl on PATH.
+
+## Pinned tools
+
+`sign` runs the repository's own pinned tools, never one it downloads. These are the versions it's tested with
+(SHA-256 of each release asset):
+
+| Tool | Release | linux aarch64 | linux x86_64 |
+| --- | --- | --- | --- |
+| rcodesign | apple-platform-rs `apple-codesign/0.29.0`, `apple-codesign-0.29.0-<arch>-unknown-linux-musl.tar.gz` | `4af92c87ddf52f5f2d1258a3b4e56c7dcb8f1b2468df744976c5f139e031961f` | `dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002` |
+| dmg | rules_applecross `ported-tools-0.0.92`, `dmg-linux-<arch>.tar.zst` | `e902f3beb581aee24796084d2e2284241e35540a95230e01f5c1899ee61c4d52` | `67ee77b978b2b7b0875c9201bb9b09e5a5f716a49450bc53c804a7e2db4866b9` |
+
+Its dependencies are version ranges (swift-crypto 3.10 up to 6, argument-parser and subprocess from their pinned
+minors), so a repository's own graph resolves them.
+
+A statically linked `sign` (rules_swift's default on Linux) writes property lists itself (PlistXML), never through
+Foundation's bridging, which can't write a Bool statically linked.
