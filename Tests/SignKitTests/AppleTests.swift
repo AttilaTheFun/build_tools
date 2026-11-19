@@ -208,3 +208,16 @@ private func makeBundle(_ path: URL, id: String, mac: Bool = false) throws {
     #expect(AppleSigner.strayMember("inner/../../x\n") == "inner/../../x")
     #expect(AppleSigner.strayMember("a..b.mobileprovision\n") == nil)
 }
+
+/// Property lists written without Foundation's bridging (a statically linked sign couldn't write a Bool), read back
+/// as Foundation reads them.
+@Test func aPlistIsWrittenAsXMLItsBoolsBoolsAndItsNumbersNumbers() throws {
+    let values: [String: Any] = ["get-task-allow": true, "aps-environment": "production", "count": 3, "groups": ["A.b", "C<d>"],
+                                 "nested": ["flag": false], "data": Data([1, 2, 3])]
+    let written = try PlistXML.data(values)
+    let text = String(decoding: written, as: UTF8.self)
+    #expect(text.contains("<key>get-task-allow</key>\n\t<true/>") && text.contains("<integer>3</integer>") && text.contains("C&lt;d&gt;"))
+    let read = try #require(try PropertyListSerialization.propertyList(from: written, format: nil) as? [String: Any])
+    #expect(isTrue(read["get-task-allow"]) && !isTrue((read["nested"] as? [String: Any])?["flag"]))
+    #expect(read["count"] as? Int == 3 && read["groups"] as? [String] == ["A.b", "C<d>"] && read["data"] as? Data == Data([1, 2, 3]))
+}

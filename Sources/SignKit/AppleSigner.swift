@@ -59,7 +59,12 @@ public struct AppleSigner: Sendable {
 
     public let rcodesign: Tool
     public let dmg: Tool?
-    public let ipaKind: IPAKind
+    /// The kinds an iPhone app may be signed as, in order: the first whose identity is here and that has a profile
+    /// for each of its bundles (`ad-hoc,development`: ad hoc where the distribution identity is, else development).
+    public let ipaKinds: [IPAKind]
+    /// A package whose platform's keys aren't here skipped, said, not refused (a public repository's release
+    /// environment that holds one platform's keys alone).
+    public let skipMissingKeys: Bool
     /// Each app's BuildVariant (its Info.plist's) set before it's signed, and a Mac app's stapled ticket taken out:
     /// how a published release makes its tested Alphas Production.
     public let variant: String?
@@ -67,14 +72,16 @@ public struct AppleSigner: Sendable {
     /// RELEASE_ASSETS.md), else each package's own name.
     public let app: String?
 
-    public init(rcodesign: String, dmg: String?, ipaKind: IPAKind, variant: String?, app: String?) throws {
+    public init(rcodesign: String, dmg: String?, ipaKinds: [IPAKind], variant: String?, app: String?, skipMissingKeys: Bool = false) throws {
+        guard !ipaKinds.isEmpty else { throw SignError("--ipa-kind names at least one kind") }
         guard FileManager.default.isExecutableFile(atPath: rcodesign) else { throw SignError("no rcodesign at \(rcodesign)") }
         if let dmg { guard FileManager.default.isExecutableFile(atPath: dmg) else { throw SignError("no dmg at \(dmg)") } }
         if let variant { guard Self.validVariant(variant) else { throw SignError("--variant is a word (Production, Alpha…)") } }
         if let app { guard !app.isEmpty, !app.contains("/") else { throw SignError("--app is the app's name") } }
         self.rcodesign = Tool(rcodesign)
         self.dmg = dmg.map(Tool.init)
-        self.ipaKind = ipaKind
+        self.ipaKinds = ipaKinds
+        self.skipMissingKeys = skipMissingKeys
         self.variant = variant
         self.app = app
     }
@@ -142,10 +149,17 @@ public struct AppleSigner: Sendable {
         }
         func file(_ name: String) -> String { (secrets.path as NSString).appendingPathComponent(name) }
         func has(_ name: String) -> Bool { (FileManager.default.contents(atPath: file(name))?.count ?? 0) > 0 }
-        var needed = ["apple-profiles"]
-        if mac { needed += ["apple-developer-id-p12", "apple-notary-key", "apple-notary-key-id", "apple-notary-issuer"] }
-        if ios { needed.append("\(ipaKind.identity)-p12") }
-        for name in needed where !has(name) { throw SignError("no \(name)") }
+        // Each platform's keys: a Mac app's Developer ID identity and notary key (its profile only where its
+        // entitlements need one); an iPhone app's profiles and an identity of one of its kinds.
+        let macMissing = ["apple-developer-id-p12", "apple-notary-key", "apple-notary-key-id", "apple-notary-issuer"].filter { !has($0) }
+        let iosKinds = ipaKinds.filter { has("\($0.identity)-p12") }
+        var iosMissing: [String] = has("apple-profiles") ? [] : ["apple-profiles"]
+        if iosKinds.isEmpty { iosMissing += Array(Set(ipaKinds.map { "\($0.identity)-p12" })).sorted() }
+        let signMac = mac && macMissing.isEmpty, signIOS = ios && iosMissing.isEmpty
+        for (platform, wanted, missing) in [("a Mac app", mac, macMissing), ("an iPhone app", ios, iosMissing)] where wanted && !missing.isEmpty {
+            guard skipMissingKeys else { throw SignError("no \(missing.joined(separator: ", ")) for \(platform)") }
+            Self.skipped("\(platform)'s packages skipped: no \(missing.joined(separator: ", ")) here")
+        }
 
         let profilesFolder = file("profiles")
         try FileManager.default.createDirectory(atPath: profilesFolder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
@@ -160,15 +174,18 @@ public struct AppleSigner: Sendable {
         let profiles = AppleProfile.all(in: profilesFolder)
 
         var developerID = ""
-        if mac {
+        if signMac {
             try secrets.write("notary.json", try Self.notaryKey(key: String(decoding: FileManager.default.contents(atPath: file("apple-notary-key"))!, as: UTF8.self),
                                                                 keyID: String(decoding: FileManager.default.contents(atPath: file("apple-notary-key-id"))!, as: UTF8.self),
                                                                 issuer: String(decoding: FileManager.default.contents(atPath: file("apple-notary-issuer"))!, as: UTF8.self)))
             developerID = try await certificate(openssl, p12: file("apple-developer-id-p12"), password: file("apple-developer-id-password"))
         }
-        var iPhoneIdentity = ""
-        if ios {
-            iPhoneIdentity = try await certificate(openssl, p12: file("\(ipaKind.identity)-p12"), password: file("\(ipaKind.identity)-password"))
+        // Each identity's certificate, read once.
+        var identities: [String: String] = [:]
+        if signIOS {
+            for identity in Set(iosKinds.map(\.identity)) {
+                identities[identity] = try await certificate(openssl, p12: file("\(identity)-p12"), password: file("\(identity)-password"))
+            }
         }
 
         let work = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("apple-sign-work-\(UUID().uuidString)").path
@@ -177,6 +194,7 @@ public struct AppleSigner: Sendable {
 
         var signed: [Signed] = []
         for package in packages {
+            if package.hasSuffix(".ipa") ? !signIOS : !signMac { continue }
             let base = ((package as NSString).lastPathComponent as NSString).deletingPathExtension
             let folder = (work as NSString).appendingPathComponent("unpacked-\(base)")
             try await unpack(package, into: folder, unzip: unzip)
@@ -185,10 +203,21 @@ public struct AppleSigner: Sendable {
                 let apps = ((try? FileManager.default.contentsOfDirectory(atPath: payload)) ?? []).filter { $0.hasSuffix(".app") }
                 guard apps.count == 1 else { throw SignError("\(base).ipa holds \(apps.count) apps in its Payload, not one") }
                 let appPath = (payload as NSString).appendingPathComponent(apps[0])
-                print("== \(base).ipa: signed (\(ipaKind.rawValue))")
                 try stamp(appPath, info: (appPath as NSString).appendingPathComponent("Info.plist"))
-                try await signBundle(appPath, platform: .ios, p12: file("\(ipaKind.identity)-p12"), password: file("\(ipaKind.identity)-password"),
-                                     certificate: iPhoneIdentity, profiles: profiles, work: work)
+                // The first kind that has its identity here and a profile for every bundle.
+                var chosen: (kind: IPAKind, steps: [ApplePlan.Step])?
+                var refusals: [String] = []
+                for kind in iosKinds {
+                    do {
+                        chosen = (kind, try await plan(appPath, platform: .ios, kind: kind.profile, certificate: identities[kind.identity] ?? "", profiles: profiles))
+                        break
+                    } catch let refusal as SignError {
+                        refusals.append("\(kind.rawValue): \(refusal)")
+                    }
+                }
+                guard let chosen else { throw SignError("\(base).ipa: no kind fits:\n" + refusals.joined(separator: "\n")) }
+                print("== \(base).ipa: signed (\(chosen.kind.rawValue))")
+                try await carryOut(chosen.steps, platform: .ios, p12: file("\(chosen.kind.identity)-p12"), password: file("\(chosen.kind.identity)-password"), work: work)
                 let info = AppleBundle.info(appPath) ?? [:]
                 let target = (out as NSString).appendingPathComponent(outputName(base: base, info: info, platform: "ios", ext: "ipa"))
                 try? FileManager.default.removeItem(atPath: target)
@@ -201,8 +230,8 @@ public struct AppleSigner: Sendable {
                 let appPath = (folder as NSString).appendingPathComponent(apps[0])
                 print("== \(apps[0]): signed, notarized, stapled")
                 try stamp(appPath, info: (appPath as NSString).appendingPathComponent("Contents/Info.plist"))
-                try await signBundle(appPath, platform: .mac, p12: file("apple-developer-id-p12"), password: file("apple-developer-id-password"),
-                                     certificate: developerID, profiles: profiles, work: work)
+                let steps = try await plan(appPath, platform: .mac, kind: .developerID, certificate: developerID, profiles: profiles)
+                try await carryOut(steps, platform: .mac, p12: file("apple-developer-id-p12"), password: file("apple-developer-id-password"), work: work)
                 try await notarize(appPath, key: file("notary.json"))
                 let info = AppleBundle.info(appPath) ?? [:]
                 // Zipped again as ditto would: the app at the top, its links kept (-y).
@@ -300,28 +329,30 @@ public struct AppleSigner: Sendable {
     func stamp(_ app: String, info path: String) throws {
         guard let variant else { return }
         guard let data = FileManager.default.contents(atPath: path) else { throw SignError("no Info.plist in \((app as NSString).lastPathComponent)") }
-        var format = PropertyListSerialization.PropertyListFormat.xml
-        guard var info = try PropertyListSerialization.propertyList(from: data, format: &format) as? [String: Any] else {
+        guard var info = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
             throw SignError("\((app as NSString).lastPathComponent)'s Info.plist isn't a dictionary")
         }
         info["BuildVariant"] = variant
-        try PropertyListSerialization.data(fromPropertyList: info, format: format == .binary ? .binary : .xml, options: 0)
-            .write(to: URL(fileURLWithPath: path))
+        // Written as XML, whatever it came as (Apple's platforms read either): PlistXML, not Foundation's bridging.
+        try PlistXML.data(info).write(to: URL(fileURLWithPath: path))
         try? FileManager.default.removeItem(atPath: (app as NSString).appendingPathComponent("Contents/CodeResources"))
         print("   BuildVariant: \(variant)")
     }
 
-    /// Each step the plan has, the deepest code first.
-    func signBundle(_ app: String, platform: ApplePlan.Platform, p12: String, password: String, certificate: String, profiles: [AppleProfile],
-                    work: String) async throws {
+    /// A bundle's steps for a profile `kind` (refused, saying why, where none fits).
+    func plan(_ app: String, platform: ApplePlan.Platform, kind: AppleProfile.Kind, certificate: String, profiles: [AppleProfile]) async throws
+        -> [ApplePlan.Step] {
         let rcodesign = rcodesign
-        let steps = try await ApplePlan.steps(app: app, platform: platform, profiles: profiles, certificate: certificate,
-                                              kinds: platform == .mac ? [.developerID] : [ipaKind.profile]) { code in
+        return try await ApplePlan.steps(app: app, platform: platform, profiles: profiles, certificate: certificate, kinds: [kind]) { code in
             let target = AppleBundle.isFolder(code) ? AppleBundle.executable(code) : code
             guard let target else { return [:] }
             let info = try await rcodesign.run(["print-signature-info", target])
             return info.ok ? try ApplePlan.entitlements(fromSignatureInfo: info.output) : [:]
         }
+    }
+
+    /// Each step carried out, the deepest code first.
+    func carryOut(_ steps: [ApplePlan.Step], platform: ApplePlan.Platform, p12: String, password: String, work: String) async throws {
         for (index, step) in steps.enumerated() {
             if let profile = step.profile, let embed = step.embed {
                 try? FileManager.default.removeItem(atPath: embed)
@@ -338,6 +369,16 @@ public struct AppleSigner: Sendable {
             guard signing.ok else {
                 throw SignError("rcodesign couldn't sign \(step.path.dropFirst(work.count + 1)):\n\(signing.output)\(signing.error)")
             }
+        }
+    }
+
+    /// A skip said on standard error and, in a GitHub job, its summary.
+    static func skipped(_ what: String) {
+        FileHandle.standardError.write(Data("sign apple: \(what) (--skip-missing-keys)\n".utf8))
+        if let summary = ProcessInfo.processInfo.environment["GITHUB_STEP_SUMMARY"], let handle = FileHandle(forWritingAtPath: summary) {
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: Data("- sign apple: \(what)\n".utf8))
+            try? handle.close()
         }
     }
 

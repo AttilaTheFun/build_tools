@@ -76,7 +76,7 @@ public struct ApplePlan {
     }
 
     static func xml(_ values: [String: Any]) throws -> Data {
-        try PropertyListSerialization.data(fromPropertyList: values, format: .xml, options: 0)
+        try PlistXML.data(values)
     }
 
     /// One profile per bundle id, all of one kind, the first kind that has one for each, every one naming the certificate.

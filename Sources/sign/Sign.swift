@@ -28,8 +28,11 @@ struct Apple: AsyncParsableCommand {
     @Option(help: "A disk image beside each Mac app, made by this dmg (rules_applecross', pinned by the repository).")
     var dmg: String?
 
-    @Option(help: "The iPhone app's profile kind: development (development's identity), ad-hoc, app-store or enterprise (distribution's).")
+    @Option(help: "The iPhone app's profile kinds, in order (ad-hoc,development): development (development's identity), ad-hoc, app-store or enterprise (distribution's); the first with its identity here and a profile for every bundle.")
     var ipaKind: String = "development"
+
+    @Flag(help: "Skip, saying so, a package whose platform's keys aren't here, rather than refusing.")
+    var skipMissingKeys = false
 
     @Option(help: "Each app's BuildVariant set before it's signed (Production, for a published release's promotion).")
     var variant: String?
@@ -58,11 +61,12 @@ struct Apple: AsyncParsableCommand {
         case (false, let folder?): source = .folder(folder)
         default: throw ValidationError("the keys come from one place: --key-from-env, or --keys <folder>")
         }
-        guard let kind = AppleSigner.IPAKind(rawValue: ipaKind) else {
-            throw ValidationError("--ipa-kind is \(AppleSigner.IPAKind.allCases.map(\.rawValue).joined(separator: ", "))")
+        let kinds = ipaKind.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.compactMap(AppleSigner.IPAKind.init(rawValue:))
+        guard !kinds.isEmpty, kinds.count == ipaKind.split(separator: ",").count else {
+            throw ValidationError("--ipa-kind is one or more of \(AppleSigner.IPAKind.allCases.map(\.rawValue).joined(separator: ", ")), comma-separated")
         }
         do {
-            let signer = try AppleSigner(rcodesign: rcodesign, dmg: dmg, ipaKind: kind, variant: variant, app: app)
+            let signer = try AppleSigner(rcodesign: rcodesign, dmg: dmg, ipaKinds: kinds, variant: variant, app: app, skipMissingKeys: skipMissingKeys)
             let signed = try await signer.sign(packages, out: out, keys: source)
             if let describe {
                 var lines = Data()
