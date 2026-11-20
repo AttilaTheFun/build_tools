@@ -57,13 +57,22 @@ public struct AndroidSigner: Sendable {
         }
     }
 
+    /// Where the signed APK is made: a new folder of the temporary directory's, the owner's alone (0700), never the
+    /// keys' tmpfs (SecretsFolder). An APK is no secret, and a job container's /dev/shm is 64 MB unless its job asks for
+    /// more (Isomer, 2026-11-20: the Playground's 157 MB APK filled it, "No space left on device").
+    static func workFolder() throws -> String {
+        let work = (NSTemporaryDirectory() as NSString).appendingPathComponent("android-sign-work-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(atPath: work, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        return work
+    }
+
     /// Signs `input` into `output`, its certificate checked against the pin: what the signed APK's certificate is.
     @discardableResult
     public func sign(_ input: String, to output: String, keys: Keys) async throws -> String {
         guard FileManager.default.fileExists(atPath: input) else { throw SignError("no such APK: \(input)") }
-        let work = try SecretsFolder(prefix: "android-sign-work")
-        defer { work.remove() }
-        let signed = (work.path as NSString).appendingPathComponent("signed.apk")
+        let work = try Self.workFolder()
+        defer { try? FileManager.default.removeItem(atPath: work) }
+        let signed = (work as NSString).appendingPathComponent("signed.apk")
         do {
             // The key and its password on a tmpfs for as long as apksigner needs them; never a command line.
             var secrets: SecretsFolder?

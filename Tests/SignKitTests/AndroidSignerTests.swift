@@ -74,3 +74,17 @@ private let v2 = "Verifies\nVerified using v2 scheme (APK Signature Scheme v2): 
     #expect(!signer.hasKeys(.environment, environment: ["ANDROID_SIGNING_KEYSTORE": "a", "ANDROID_SIGNING_PASSWORD": ""]))
     #expect(signer.hasKeys(.environment, environment: ["ANDROID_SIGNING_KEYSTORE": "a", "ANDROID_SIGNING_PASSWORD": "b"]))
 }
+
+@Test func theSignedAPKIsMadeOnDiskNotTheKeysTmpfs() throws {
+    // Isomer, 2026-11-20: a 157 MB APK filled a job container's 64 MB /dev/shm. The APK is made in the temporary
+    // directory, the owner's alone; only the keys are on the tmpfs.
+    let work = try AndroidSigner.workFolder()
+    defer { try? FileManager.default.removeItem(atPath: work) }
+    #expect(!work.hasPrefix("/dev/shm"))
+    #expect(work.hasPrefix(NSTemporaryDirectory()) || work.hasPrefix((NSTemporaryDirectory() as NSString).standardizingPath))
+    let mode = try FileManager.default.attributesOfItem(atPath: work)[.posixPermissions] as? Int
+    #expect(mode == 0o700)
+    let next = try AndroidSigner.workFolder()
+    defer { try? FileManager.default.removeItem(atPath: next) }
+    #expect(next != work, "a new folder each signing")
+}
