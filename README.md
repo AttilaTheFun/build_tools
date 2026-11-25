@@ -1,6 +1,6 @@
 # build_tools
 
-The build tools Logan's repositories share (isomer, playground, visor, shireworks): Swift executables a repository
+The build tools Logan's repositories share (isomer, playground, visor, shireworks, images): Swift executables a repository
 takes through [rules_swift_package_manager](https://github.com/cgrindel/rules_swift_package_manager) at a tagged
 version, built from source by Bazel and cached.
 
@@ -71,6 +71,29 @@ tool ends.
 
     A password-less .p12 has no password secret. A .p12 is as Keychain Access exports one (3DES): rcodesign can't
     open OpenSSL 3's default, so one re-wrapped needs `-legacy`. Needs unzip, zip, tar and openssl on PATH.
+
+- `sign team --keys <folder> --bundle <id>`: the team of the bundle's profiles in the keys' apple-profiles, printed
+  and nothing else (a build stamps the team's prefix into its Info.plist, for the shared sign-in's keychain group,
+  with no team id in the repository).
+
+## release
+
+A release's steps in its CI job, ported from shireworks' version_from_tags.sh, check_version_line.sh,
+draft_release.sh and attach_release.sh. It talks to GitHub's REST API itself (no `gh`), with the job's token
+(`GH_TOKEN`, else `GITHUB_TOKEN`) and `GITHUB_REPOSITORY`; the commit is `GITHUB_SHA` unless given.
+
+- `release version <Info.plist>… [--build-number <Info.plist>]… [--output "$GITHUB_OUTPUT"]`: the build's version,
+  `MAJOR.MINOR.N`, the first Info.plist's committed line (`MAJOR.MINOR.0`) with N one past the highest of the line's
+  releases and tags, or the one this commit already has. It's stamped into each Info.plist's
+  CFBundleShortVersionString (and `--build-number`'s CFBundleVersion) as text, the rest of the file as it was, and
+  printed (and written as `version=` to `--output`).
+- `release check-line <version>`: refused (`::error::`, exit 1) when the version's line already has a production
+  release: the committed line moves on first.
+- `release draft <version> --kind prerelease|release --notes <notes.md> --app <App>`: the draft release `v<version>`,
+  "<App> <version>", at the commit; the draft of that tag brought up to date if there is one.
+- `release attach <tag> <folder>`: the folder's files attached to the release (one of the same name replaced), the
+  release waited for a minute if it isn't listed yet, and `builds.json` last; a folder without it may hold only the
+  proof (`proof.zip`, `proof-diff.json`).
 
 ## Pinned tools
 

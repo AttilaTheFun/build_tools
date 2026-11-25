@@ -104,3 +104,30 @@ func isTrue(_ value: Any?) -> Bool {
     #endif
     return (value as? Bool) == true
 }
+
+extension AppleProfile {
+    /// The team whose profiles for `bundle` are in a keys folder's apple-profiles (and -2…-9) archives: for a build
+    /// that stamps the team's prefix into its Info.plist (the shared sign-in's keychain group), with no team id in the
+    /// repository. Unpacked into a private folder of its own, removed after; a member outside its folder refused.
+    public static func team(keys: String, bundle: String) async throws -> String {
+        guard let tar = Tool.find("tar") else { throw SignError("no tar on PATH") }
+        let work = FileManager.default.temporaryDirectory.appendingPathComponent("sign-team-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: work, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(atPath: work) }
+        var unpacked = false
+        for name in ["apple-profiles"] + (2...9).map({ "apple-profiles-\($0)" }) {
+            let archive = (keys as NSString).appendingPathComponent(name)
+            guard (FileManager.default.contents(atPath: archive)?.count ?? 0) > 0 else { continue }
+            let listed = try await tar.run(["-tf", archive])
+            guard listed.ok else { throw SignError("\(name) isn't a .tar or .tar.gz") }
+            if let stray = AppleSigner.strayMember(listed.output) { throw SignError("\(name) has a member outside its folder: \(stray)") }
+            guard try await tar.run(["-xf", archive, "-C", work, "--no-same-owner"]).ok else { throw SignError("\(name) isn't a .tar or .tar.gz") }
+            unpacked = true
+        }
+        guard unpacked else { throw SignError("no apple-profiles in \(keys)") }
+        let teams = Set(all(in: work).filter { $0.bundleID == bundle }.map(\.team))
+        guard let team = teams.first else { throw SignError("no profile here is for \(bundle)") }
+        guard teams.count == 1 else { throw SignError("\(bundle)'s profiles are of more than one team") }
+        return team
+    }
+}

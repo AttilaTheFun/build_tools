@@ -250,3 +250,33 @@ private func makeBundle(_ path: URL, id: String, mac: Bool = false) throws {
     await #expect(throws: SignError.self) { try await signer.sign([], out: NSTemporaryDirectory(), keys: .folder(NSTemporaryDirectory())) }
     #expect(throws: SignError.self) { try AppleSigner(rcodesign: "/nonexistent/rcodesign", dmg: nil, ipaKinds: [.adHoc], variant: nil, app: nil) }
 }
+
+// sign team: the team of a bundle's profiles, from the keys' apple-profiles archive.
+
+private func profileXML(team: String, bundle: String) -> String {
+    """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0"><dict>
+    <key>Name</key><string>CI Development: \(bundle)</string>
+    <key>TeamIdentifier</key><array><string>\(team)</string></array>
+    <key>ExpirationDate</key><date>2030-01-01T00:00:00Z</date>
+    <key>ProvisionedDevices</key><array/>
+    <key>Entitlements</key><dict><key>application-identifier</key><string>\(team).\(bundle)</string></dict>
+    </dict></plist>
+    """
+}
+
+@Test func theTeamIsTheBundlesProfiles() async throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("sign-team-test-\(UUID().uuidString)")
+    let profiles = base.appendingPathComponent("profiles"), keys = base.appendingPathComponent("keys")
+    defer { try? FileManager.default.removeItem(at: base) }
+    try FileManager.default.createDirectory(at: profiles, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: keys, withIntermediateDirectories: true)
+    try profileXML(team: "TEAMA12345", bundle: "com.example.Images").write(to: profiles.appendingPathComponent("images.mobileprovision"), atomically: true, encoding: .utf8)
+    try profileXML(team: "TEAMB12345", bundle: "com.example.Other").write(to: profiles.appendingPathComponent("other.provisionprofile"), atomically: true, encoding: .utf8)
+    let tar = try #require(Tool.find("tar"))
+    #expect(try await tar.run(["-czf", keys.appendingPathComponent("apple-profiles").path, "-C", profiles.path, "."]).ok)
+    #expect(try await AppleProfile.team(keys: keys.path, bundle: "com.example.Images") == "TEAMA12345")
+    await #expect(throws: SignError.self) { try await AppleProfile.team(keys: keys.path, bundle: "com.example.Missing") }
+}
