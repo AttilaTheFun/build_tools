@@ -68,7 +68,12 @@ public struct Releasing: Sendable {
 
     /// Every file in `folder` attached to `tag`'s release, one of the same name replaced, builds.json last (what
     /// Applications reads, once the builds it names are there). A folder without builds.json may hold the proof alone.
-    public func attach(tag: String, folder: URL, waitForRelease: Duration = .seconds(60), log: (String) -> Void = { print($0) }) async throws {
+    ///
+    /// The release never goes without a file it had: each is uploaded under a staged name (`new-<run>-<name>`) first,
+    /// and only then is the old one deleted and the staged one renamed (p2prc#12: a delete that landed, then an upload
+    /// that got a 502, lost a release's APK). `run` is the job's GITHUB_RUN_ID, else a fresh one.
+    public func attach(tag: String, folder: URL, run: String? = ProcessInfo.processInfo.environment["GITHUB_RUN_ID"],
+                       waitForRelease: Duration = .seconds(60), log: (String) -> Void = { print($0) }) async throws {
         let names = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { name in
             var isDirectory: ObjCBool = false
             return FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path, isDirectory: &isDirectory) && !isDirectory.boolValue
@@ -89,12 +94,18 @@ public struct Releasing: Sendable {
             release = try await github.releases().first { $0.tag == tag }
         }
         guard let release else { throw ReleaseError("no release \(tag) in \(github.repository)") }
-        let existing = try await github.assets(release: release.id)
+        let stage = "new-\(run.flatMap { $0.isEmpty ? nil : $0 } ?? String(UUID().uuidString.prefix(8)).lowercased())-"
         for name in files + (names.contains("builds.json") ? ["builds.json"] : []) {
-            for asset in existing where asset.name == name {
-                try await github.deleteAsset(id: asset.id)
+            // A staged copy an earlier run of this job left goes first.
+            for leftover in try await github.assets(release: release.id) where leftover.name == stage + name {
+                try await github.deleteAsset(id: leftover.id)
             }
-            try await github.upload(release: release.id, name: name, type: Self.contentType(name), file: folder.appendingPathComponent(name))
+            let staged = try await github.upload(release: release.id, name: stage + name, type: Self.contentType(name),
+                                                 file: folder.appendingPathComponent(name))
+            for old in try await github.assets(release: release.id) where old.name == name {
+                try await github.deleteAsset(id: old.id)
+            }
+            try await github.renameAsset(id: staged.id, to: name)
             log("\(name) attached to \(tag)")
         }
     }
