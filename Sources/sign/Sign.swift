@@ -7,7 +7,29 @@ import SignKit
 struct Sign: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Sign builds with their release keys, in their CI job.",
-        subcommands: [Android.self, Apple.self])
+        subcommands: [Android.self, Apple.self, Team.self])
+}
+
+/// `sign team`: the team of a bundle's profiles in the keys (for the build's Info.plist, before it's signed), printed
+/// and nothing else of them.
+struct Team: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Print the team of a bundle's profiles in the keys' apple-profiles (the team's prefix a build stamps in).")
+
+    @Option(help: "A folder holding apple-profiles (Shireworks' secrets-fetch).")
+    var keys: String
+
+    @Option(help: "The bundle id whose profiles say the team.")
+    var bundle: String
+
+    func run() async throws {
+        do {
+            print(try await AppleProfile.team(keys: keys, bundle: bundle))
+        } catch let error as SignError {
+            FileHandle.standardError.write(Data("sign team: \(error.description)\n".utf8))
+            throw ExitCode.failure
+        }
+    }
 }
 
 /// `sign apple`: a Mac app (Developer ID, notarized and stapled, a disk image too) or an iPhone app (its profiles)

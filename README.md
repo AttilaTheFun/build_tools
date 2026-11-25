@@ -72,6 +72,10 @@ tool ends.
     A password-less .p12 has no password secret. A .p12 is as Keychain Access exports one (3DES): rcodesign can't
     open OpenSSL 3's default, so one re-wrapped needs `-legacy`. Needs unzip, zip, tar and openssl on PATH.
 
+- `sign team --keys <folder> --bundle <id>`: the team of the bundle's profiles in the keys' apple-profiles, printed
+  and nothing else (a build stamps the team's prefix into its Info.plist, for the shared sign-in's keychain group,
+  with no team id in the repository).
+
 ## release
 
 A release's steps in its CI job, ported from shireworks' version_from_tags.sh, check_version_line.sh,
