@@ -45,6 +45,10 @@ tool ends.
     <dmg>`, its disk image beside it (the app and an Applications link), signed, notarized and stapled too. A Mac app
     asking for an entitlement only a profile allows (keychain groups, push, a `group.*` app group), with no profile
     for it, is refused: macOS would kill it at launch, and notarizing doesn't catch that.
+  - `--mac-kind development`: a Mac app's .zip signed with the Apple Development identity and its Mac development
+    profile (always embedded; it names the Macs the build runs on), its entitlements made the profile's, not
+    notarized and with no disk image: for an entitlement Apple provisions for development and the App Store but not
+    Developer ID (Sensitive Content Analysis). Its keys are apple-development-p12 and -password, and apple-profiles.
   - An iPhone app's .ipa: its extensions, then the app, each with its own profile of `--ipa-kind` (development, the
     default, signed with the development identity; ad-hoc, app-store or enterprise, with the distribution one) and
     its entitlements made the profile's; every other piece of code with the same identity, deepest first.

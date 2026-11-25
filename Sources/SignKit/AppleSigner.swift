@@ -27,6 +27,18 @@ public struct AppleSigner: Sendable {
 
     /// The kind of profile an iPhone app is signed with, and so its identity: development's certificate for a
     /// development profile, distribution's for the others.
+    /// How a Mac app's .zip is signed: Developer ID (notarized, for anyone's Mac), or development (the team's Apple
+    /// Development identity and a Mac development profile naming the Macs it runs on; not notarized, no disk image):
+    /// for an entitlement Apple provisions for development and the App Store but not Developer ID (Sensitive
+    /// Content Analysis).
+    public enum MacKind: String, Sendable, CaseIterable {
+        case developerID = "developer-id", development
+
+        var profile: AppleProfile.Kind { self == .development ? .development : .developerID }
+        var identity: String { self == .development ? "apple-development" : "apple-developer-id" }
+        var notarized: Bool { self == .developerID }
+    }
+
     public enum IPAKind: String, Sendable, CaseIterable {
         case development, adHoc = "ad-hoc", appStore = "app-store", enterprise
 
@@ -69,6 +81,8 @@ public struct AppleSigner: Sendable {
     /// The kinds an iPhone app may be signed as, in order: the first whose identity is here and that has a profile
     /// for each of its bundles (`ad-hoc,development`: ad hoc where the distribution identity is, else development).
     public let ipaKinds: [IPAKind]
+    /// How a Mac app's .zip is signed.
+    public let macKind: MacKind
     /// A package whose platform's keys aren't here skipped, said, not refused (a public repository's release
     /// environment that holds one platform's keys alone).
     public let skipMissingKeys: Bool
@@ -81,9 +95,10 @@ public struct AppleSigner: Sendable {
     /// RELEASE_ASSETS.md), else each package's own name.
     public let app: String?
 
-    public init(rcodesign: String?, dmg: String?, ipaKinds: [IPAKind], variant: String?, app: String?, skipMissingKeys: Bool = false,
-                commit: String? = nil) throws {
+    public init(rcodesign: String?, dmg: String?, ipaKinds: [IPAKind], macKind: MacKind = .developerID, variant: String?, app: String?,
+                skipMissingKeys: Bool = false, commit: String? = nil) throws {
         guard !ipaKinds.isEmpty else { throw SignError("--ipa-kind names at least one kind") }
+        if dmg != nil, macKind == .development { throw SignError("--dmg is for a Developer ID Mac app: a development one isn't notarized") }
         if let rcodesign { guard FileManager.default.isExecutableFile(atPath: rcodesign) else { throw SignError("no rcodesign at \(rcodesign)") } }
         if let dmg { guard FileManager.default.isExecutableFile(atPath: dmg) else { throw SignError("no dmg at \(dmg)") } }
         if let variant { guard Self.validVariant(variant) else { throw SignError("--variant is a word (Production, Alpha…)") } }
@@ -91,6 +106,7 @@ public struct AppleSigner: Sendable {
         self.rcodesignTool = rcodesign.map(Tool.init)
         self.dmg = dmg.map(Tool.init)
         self.ipaKinds = ipaKinds
+        self.macKind = macKind
         self.skipMissingKeys = skipMissingKeys
         self.commit = commit
         self.variant = variant
@@ -163,7 +179,8 @@ public struct AppleSigner: Sendable {
         func has(_ name: String) -> Bool { (FileManager.default.contents(atPath: file(name))?.count ?? 0) > 0 }
         // Each platform's keys: a Mac app's Developer ID identity and notary key (its profile only where its
         // entitlements need one); an iPhone app's profiles and an identity of one of its kinds.
-        let macMissing = ["apple-developer-id-p12", "apple-notary-key", "apple-notary-key-id", "apple-notary-issuer"].filter { !has($0) }
+        let macMissing = (macKind.notarized ? ["apple-developer-id-p12", "apple-notary-key", "apple-notary-key-id", "apple-notary-issuer"]
+                                            : ["\(macKind.identity)-p12"]).filter { !has($0) }
         let iosKinds = ipaKinds.filter { has("\($0.identity)-p12") }
         var iosMissing: [String] = has("apple-profiles") ? [] : ["apple-profiles"]
         if iosKinds.isEmpty { iosMissing += Array(Set(ipaKinds.map { "\($0.identity)-p12" })).sorted() }
@@ -186,7 +203,9 @@ public struct AppleSigner: Sendable {
         let profiles = AppleProfile.all(in: profilesFolder)
 
         var developerID = ""
-        if signMac {
+        if signMac, !macKind.notarized {
+            developerID = try await certificate(openssl, p12: file("\(macKind.identity)-p12"), password: file("\(macKind.identity)-password"))
+        } else if signMac {
             try secrets.write("notary.json", try Self.notaryKey(key: String(decoding: FileManager.default.contents(atPath: file("apple-notary-key"))!, as: UTF8.self),
                                                                 keyID: String(decoding: FileManager.default.contents(atPath: file("apple-notary-key-id"))!, as: UTF8.self),
                                                                 issuer: String(decoding: FileManager.default.contents(atPath: file("apple-notary-issuer"))!, as: UTF8.self)))
@@ -240,11 +259,12 @@ public struct AppleSigner: Sendable {
                 let apps = ((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []).filter { $0.hasSuffix(".app") }
                 guard apps.count == 1 else { throw SignError("\(base).zip holds \(apps.count) apps at its top, not one") }
                 let appPath = (folder as NSString).appendingPathComponent(apps[0])
-                print("== \(apps[0]): signed, notarized, stapled")
+                print("== \(apps[0]): " + (macKind.notarized ? "signed, notarized, stapled" : "signed (development)"))
                 try stamp(appPath, info: (appPath as NSString).appendingPathComponent("Contents/Info.plist"))
-                let steps = try await plan(appPath, platform: .mac, kind: .developerID, certificate: developerID, profiles: profiles)
-                try await carryOut(steps, platform: .mac, p12: file("apple-developer-id-p12"), password: file("apple-developer-id-password"), work: work)
-                try await notarize(appPath, key: file("notary.json"))
+                let steps = try await plan(appPath, platform: .mac, kind: macKind.profile, certificate: developerID, profiles: profiles)
+                try await carryOut(steps, platform: .mac, p12: file("\(macKind.identity)-p12"), password: file("\(macKind.identity)-password"),
+                                   work: work, forNotarization: macKind.notarized)
+                if macKind.notarized { try await notarize(appPath, key: file("notary.json")) }
                 let info = AppleBundle.info(appPath) ?? [:]
                 // Zipped again as ditto would: the app at the top, its links kept (-y).
                 let target = (out as NSString).appendingPathComponent(outputName(base: base, info: info, platform: "macos", ext: "zip"))
@@ -366,13 +386,14 @@ public struct AppleSigner: Sendable {
     }
 
     /// Each step carried out, the deepest code first.
-    func carryOut(_ steps: [ApplePlan.Step], platform: ApplePlan.Platform, p12: String, password: String, work: String) async throws {
+    func carryOut(_ steps: [ApplePlan.Step], platform: ApplePlan.Platform, p12: String, password: String, work: String,
+                  forNotarization: Bool = true) async throws {
         for (index, step) in steps.enumerated() {
             if let profile = step.profile, let embed = step.embed {
                 try? FileManager.default.removeItem(atPath: embed)
                 try FileManager.default.copyItem(atPath: profile, toPath: embed)
             }
-            var arguments = ["sign"] + p12Arguments(p12, password) + (platform == .mac ? ["--for-notarization"] : [])
+            var arguments = ["sign"] + p12Arguments(p12, password) + (platform == .mac && forNotarization ? ["--for-notarization"] : [])
             if step.bundle { arguments.append("--shallow") }
             if let entitlements = step.entitlements {
                 let file = (work as NSString).appendingPathComponent("entitlements-\(index).plist")

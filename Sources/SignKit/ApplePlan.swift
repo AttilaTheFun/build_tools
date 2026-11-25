@@ -54,9 +54,16 @@ public struct ApplePlan {
             }
         case .mac:
             for code in nested { steps.append(Step(path: code, bundle: AppleBundle.isFolder(code))) }
-            // A Mac app's Developer ID profile, if it has one here: only an app whose entitlements Apple restricts needs one.
-            let candidates = profiles.filter { $0.bundleID == appID && $0.kind == .developerID && $0.expires > now && $0.certificates.contains(certificate) }
+            // A Mac app's profile of the kind asked for (Developer ID, the default, or development), if it has one
+            // here: a Developer ID app needs one only where its entitlements Apple restricts; a development build
+            // always does (it names the Macs it runs on).
+            let kind = kinds.first ?? .developerID
+            let candidates = profiles.filter { $0.bundleID == appID && $0.kind == kind && $0.expires > now && $0.certificates.contains(certificate) }
             let ownValues = try await own(app)
+            if kind != .developerID, candidates.isEmpty {
+                throw SignError("no \(kind.rawValue) profile for \(appID) here naming the signing certificate: "
+                                + AppleProfile.described(profiles, appID, certificate: certificate, now: now))
+            }
             if let profile = candidates.max(by: { $0.expires < $1.expires }) {
                 steps.append(Step(path: app, bundle: true, entitlements: try xml(entitlements(own: ownValues, bundle: appID, profile: profile)),
                                   profile: profile.path, embed: (app as NSString).appendingPathComponent("Contents/embedded.provisionprofile")))

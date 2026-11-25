@@ -53,6 +53,9 @@ struct Apple: AsyncParsableCommand {
     @Option(help: "The iPhone app's profile kinds, in order (ad-hoc,development): development (development's identity), ad-hoc, app-store or enterprise (distribution's); the first with its identity here and a profile for every bundle.")
     var ipaKind: String = "development"
 
+    @Option(help: "How a Mac app's .zip is signed: developer-id (the default: notarized, its disk image with --dmg) or development (the Apple Development identity and a Mac development profile naming the Macs it runs on; not notarized).")
+    var macKind: String = "developer-id"
+
     @Flag(help: "Skip, saying so, a package whose platform's keys aren't here, rather than refusing.")
     var skipMissingKeys = false
 
@@ -99,8 +102,11 @@ struct Apple: AsyncParsableCommand {
         guard !kinds.isEmpty, kinds.count == ipaKind.split(separator: ",").count else {
             throw ValidationError("--ipa-kind is one or more of \(AppleSigner.IPAKind.allCases.map(\.rawValue).joined(separator: ", ")), comma-separated")
         }
+        guard let mac = AppleSigner.MacKind(rawValue: macKind) else {
+            throw ValidationError("--mac-kind is \(AppleSigner.MacKind.allCases.map(\.rawValue).joined(separator: " or "))")
+        }
         do {
-            let signer = try AppleSigner(rcodesign: rcodesign, dmg: dmg, ipaKinds: kinds, variant: variant, app: app,
+            let signer = try AppleSigner(rcodesign: rcodesign, dmg: dmg, ipaKinds: kinds, macKind: mac, variant: variant, app: app,
                                          skipMissingKeys: skipMissingKeys, commit: commit)
             let signed: [AppleSigner.Signed]
             if let source {
