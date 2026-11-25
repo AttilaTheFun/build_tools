@@ -172,7 +172,8 @@ private func makeBundle(_ path: URL, id: String, mac: Bool = false) throws {
                                           kinds: [.development]) { _ in analysis }
     let last = try #require(steps.last)
     #expect(last.profile == development.path && last.embed?.hasSuffix("Contents/embedded.provisionprofile") == true)
-    let entitlements = try #require(PropertyListSerialization.propertyList(from: try #require(last.entitlements), format: nil) as? [String: Any])
+    let entitlementsData = try #require(last.entitlements)
+    let entitlements = try #require(PropertyListSerialization.propertyList(from: entitlementsData, format: nil) as? [String: Any])
     #expect(entitlements["com.apple.developer.sensitivecontentanalysis.client"] as? [String] == ["analysis"])
     // A Developer ID profile can't carry it: a Developer ID build asking for it is refused.
     await #expect(throws: SignError.self) {
