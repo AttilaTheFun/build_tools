@@ -15,6 +15,8 @@ let package = Package(
         .executable(name: "proof-diff", targets: ["proof-diff"]),
         // A repository's proof of its tests' results, when it has no apps.
         .executable(name: "tests-proof", targets: ["tests-proof"]),
+        // A release's steps in its CI job: the build's version, the line's check, the draft and its assets.
+        .executable(name: "release", targets: ["release"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
@@ -51,6 +53,12 @@ let package = Package(
             name: "tests-proof",
             dependencies: ["ProofKit", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
         .testTarget(name: "ProofKitTests", dependencies: ["ProofKit"]),
+        // GitHub's REST API by URLSession (FoundationNetworking on Linux), with the job's token.
+        .target(name: "ReleaseKit"),
+        .executableTarget(
+            name: "release",
+            dependencies: ["ReleaseKit", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
+        .testTarget(name: "ReleaseKitTests", dependencies: ["ReleaseKit"]),
     ],
     swiftLanguageModes: [.v6]
 )
