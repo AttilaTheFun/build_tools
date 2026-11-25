@@ -31,6 +31,8 @@ public struct Releasing: Sendable {
             guard let stamped = InfoPlistText.setting("CFBundleShortVersionString", to: version, in: texts[plist]!) else {
                 throw ReleaseError("\(plist.path) has no CFBundleShortVersionString to stamp")
             }
+            // Kept for the build number's stamp below: an Info.plist in both lists gets both.
+            texts[plist] = stamped
             try stamped.write(to: plist, atomically: true, encoding: .utf8)
         }
         for plist in buildNumberPlists {
