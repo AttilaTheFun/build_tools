@@ -182,6 +182,16 @@ private func makeBundle(_ path: URL, id: String, mac: Bool = false) throws {
     }
 }
 
+@Test func aMacProfileNamingDevicesIsDevelopmentWithoutGetTaskAllow() throws {
+    // As Apple makes a Mac development profile: its devices, and no get-task-allow.
+    let info: [String: Any] = ["Name": "Mac Development", "ApplicationIdentifierPrefix": [team], "TeamIdentifier": [team],
+                               "Platform": ["OSX"], "ExpirationDate": Date(timeIntervalSinceNow: 86_400),
+                               "DeveloperCertificates": [certificate], "ProvisionedDevices": ["mac"],
+                               "Entitlements": ["com.apple.application-identifier": "\(team).com.example.Mac"]]
+    let read = try AppleProfile(path: "/profiles/mac.provisionprofile", info: info)
+    #expect(read.mac && read.kind == .development)
+}
+
 @Test func aDevelopmentMacBuildHasNoDiskImage() {
     #expect(throws: SignError.self) {
         try AppleSigner(rcodesign: nil, dmg: "/bin/sh", ipaKinds: [.development], macKind: .development, variant: nil, app: nil)
