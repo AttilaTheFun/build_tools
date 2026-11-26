@@ -110,3 +110,9 @@ minors), so a repository's own graph resolves them.
 
 A statically linked `sign` (rules_swift's default on Linux) writes property lists itself (PlistXML), never through
 Foundation's bridging, which can't write a Bool statically linked.
+
+## CI
+
+Pull requests and main's commits are built and tested on Linux alone (`.github/workflows/ci.yml`): Apple runners
+only at release verification (Logan, 2026-11-13). A release (`release.yml`) builds and tests on Linux and on a Mac
+before it's proposed.
