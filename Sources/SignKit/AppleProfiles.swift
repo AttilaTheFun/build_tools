@@ -48,7 +48,9 @@ public struct AppleProfile: @unchecked Sendable {
         if isTrue(info["ProvisionsAllDevices"]) {
             kind = mac ? .developerID : .enterprise
         } else if info["ProvisionedDevices"] != nil {
-            kind = debuggable ? .development : .adHoc
+            // A Mac has no ad hoc profiles: one naming devices is its development profile, with or without
+            // get-task-allow (Apple's Mac development profiles carry none; Images' first Alpha was refused for it).
+            kind = debuggable || mac ? .development : .adHoc
         } else {
             kind = .appStore
         }
