@@ -186,6 +186,20 @@ private func temporaryFolder() throws -> URL {
     #expect(InfoPlistText.value(of: "CFBundleVersion", in: try String(contentsOf: helper, encoding: .utf8)) == "1.2.4")
 }
 
+// An app's Info.plist that carries the version as its build number too (GitHub Drive's): both are stamped, the
+// build number's write not undoing the version's.
+@Test func anInfoPlistInBothListsGetsBoth() async throws {
+    let fake = FakeGitHub(releases: [], tags: [])
+    let folder = try temporaryFolder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let app = folder.appendingPathComponent("App.plist")
+    try plist.write(to: app, atomically: true, encoding: .utf8)
+    let version = try await releasing(fake).stampVersion(plists: [app], buildNumberPlists: [app], commit: "z")
+    let text = try String(contentsOf: app, encoding: .utf8)
+    #expect(InfoPlistText.value(of: "CFBundleShortVersionString", in: text) == version)
+    #expect(InfoPlistText.value(of: "CFBundleVersion", in: text) == version)
+}
+
 @Test func aPublishedLineRefusesAProposal() async throws {
     let open = FakeGitHub(releases: [release(1, "v1.2.1", prerelease: true), release(2, "v1.2.2", draft: true)])
     #expect(try await releasing(open).checkLine("1.2.3").contains("may be proposed"))
