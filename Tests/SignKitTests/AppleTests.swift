@@ -154,6 +154,40 @@ private func makeBundle(_ path: URL, id: String, mac: Bool = false) throws {
     #expect(plain.count == 1 && plain[0].entitlements == nil && plain[0].profile == nil)
 }
 
+// --mac-kind development: a Mac app's development profile, always embedded, its restricted entitlements allowed.
+@Test func aMacDevelopmentBuildAlwaysEmbedsItsDevelopmentProfile() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("build-tools-mac-dev-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let app = root.appendingPathComponent("Mac.app")
+    try makeBundle(app, id: "com.example.Mac", mac: true)
+    let analysis: [String: Any] = ["com.apple.developer.sensitivecontentanalysis.client": ["analysis"]]
+    // None: refused, even for an app asking for nothing (a development build names the Macs it runs on).
+    await #expect(throws: SignError.self) {
+        try await ApplePlan.steps(app: app.path, platform: .mac, profiles: [try profile("com.example.Mac", mac: true, kind: .developerID)],
+                                  certificate: certificateSHA, kinds: [.development]) { _ in [:] }
+    }
+    let development = try profile("com.example.Mac", mac: true, kind: .development, entitlements: analysis)
+    #expect(development.kind == .development && development.mac)
+    let steps = try await ApplePlan.steps(app: app.path, platform: .mac, profiles: [development], certificate: certificateSHA,
+                                          kinds: [.development]) { _ in analysis }
+    let last = try #require(steps.last)
+    #expect(last.profile == development.path && last.embed?.hasSuffix("Contents/embedded.provisionprofile") == true)
+    let entitlementsData = try #require(last.entitlements)
+    let entitlements = try #require(PropertyListSerialization.propertyList(from: entitlementsData, format: nil) as? [String: Any])
+    #expect(entitlements["com.apple.developer.sensitivecontentanalysis.client"] as? [String] == ["analysis"])
+    // A Developer ID profile can't carry it: a Developer ID build asking for it is refused.
+    await #expect(throws: SignError.self) {
+        try await ApplePlan.steps(app: app.path, platform: .mac, profiles: [try profile("com.example.Mac", mac: true, kind: .developerID)],
+                                  certificate: certificateSHA, kinds: [.developerID]) { _ in analysis }
+    }
+}
+
+@Test func aDevelopmentMacBuildHasNoDiskImage() {
+    #expect(throws: SignError.self) {
+        try AppleSigner(rcodesign: nil, dmg: "/bin/sh", ipaKinds: [.development], macKind: .development, variant: nil, app: nil)
+    }
+}
+
 @Test func rcodesignsEntitlementsAreRead() throws {
     let output = """
     signature:
