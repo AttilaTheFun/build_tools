@@ -115,10 +115,13 @@ container only. The exit status is Bazel's.
   build and to finding its files (`bazel info execution_root`, `bazel cquery --output=files`); the other words are the
   targets, one union for cquery.
 - **The bazelrc** comes from Nimbus: the tool runs `nimbus job bazel-config` (the runner's own
-  `/opt/nimbus/bin/nimbus`) and takes the path it prints on its last line. That bazelrc holds the downloader config that
-  sends the Xcode SDK and rules_applecross' ported tools to the server's files (no repository pins their SHA-256), the
-  runner's size, and `--config=apple_on_linux`. `--bazelrc <file>` names one instead (Nimbus' command is only asked
-  without it).
+  `/opt/nimbus/bin/nimbus`, nimbus#234, from Nimbus' next release) in the checkout and takes the path it prints, one
+  line on standard output. Nimbus writes `.ci/downloader.cfg` and `.ci/nimbus.bazelrc` there (keep `.ci` out of git).
+  The bazelrc holds `common --downloader_config=<path>`, which sends the Xcode SDK and rules_applecross' ported tools to
+  the server's files (no repository pins their SHA-256), `build --config=apple_on_linux` (given twice, Bazel only
+  warns), and under 8 GB of memory `build --worker_max_instances=SwiftCompile=1 --jobs=2` and
+  `startup --host_jvm_args=-Xmx1g`: startup options in the file, so `--bazelrc=` is all Bazel needs. `--bazelrc <file>`
+  names one instead (Nimbus' command is only asked without it).
 - Like `sign`, it is built by Bazel in a step of its own, with no secret in the environment, and run directly.
 
 ## Pinned tools
