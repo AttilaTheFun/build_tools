@@ -62,13 +62,14 @@ tool ends.
     has them. builds.json is written pretty-printed, its keys sorted.
   - What the build left out, stamped into the outer app just before it's signed (a build on runners that hold no
     secrets: the signing job has them): `--add-infoplist <file.json>`, a JSON object whose values are strings or
-    arrays of strings, merged into its Info.plist (a key already there with another value is refused);
-    `--add-app-group <group>`, appended once to `com.apple.security.application-groups` (made where there's none);
-    `--add-keychain-group <TEAM.group>`, appended last to `keychain-access-groups`, after the app's own (where it has
-    none, `<TEAM>.<bundle id>` first, so the app still saves to its own group by default). Each repeatable but the
-    first. The groups go in before its profile is checked, and one the profile doesn't allow is refused. Only the
-    outer app gets them, never its extensions, and nothing of their values is printed: a refusal says which option
-    and how many, never what.
+    arrays of strings, each key once, merged into its Info.plist (a key already there with another value is refused,
+    and so is BuildVariant, `--variant`'s); `--add-groups <file.json>`, `{"app": [...], "keychain": [...]}`: app
+    groups appended once to `com.apple.security.application-groups` (made where there's none), keychain groups
+    (`<TEAM>.<group>`) appended last to `keychain-access-groups`, after the app's own (where it has none, its
+    profile's `<prefix>.<bundle id>` first, so the app still saves to its own group by default). Files, never the
+    command line, where another process or a step echoing it would see them. The groups go in before its profile is
+    checked, and one the profile doesn't allow is refused. Only the outer app gets them, never its extensions, and
+    nothing of their values is printed: a refusal says which file and how many, never what.
   - `--unsigned` (an experiment's, from a branch with no keys): each Apple package copied out as built, named and
     described the same way, not signed or stamped: its line's variant `AdHoc` and `"signed": false`, which Applications
     lists only in an experiment's release (`adhoc-…`). It runs no rcodesign, so it needs no `--rcodesign`.

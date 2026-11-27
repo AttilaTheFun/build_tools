@@ -149,7 +149,8 @@ public struct ApplePlan {
             throw SignError("\(bundle)'s profile (\(profile.name)) does not allow the \(refused): give its App ID those groups and make the "
                             + "profile again")
         }
-        var result = additions.applied(to: own.isEmpty ? concrete(allowed, prefix: profile.prefix, bundle: bundle) : own, bundle: bundle)
+        var result = additions.applied(to: own.isEmpty ? concrete(allowed, prefix: profile.prefix, bundle: bundle) : own, bundle: bundle,
+                                       prefix: profile.prefix)
         let built = (own[identifierKey] as? String).flatMap { $0.contains(".") ? String($0.prefix { $0 != "." }) + "." : nil }
         result[identifierKey] = profile.prefix + "." + bundle
         if allowed["com.apple.developer.team-identifier"] != nil { result["com.apple.developer.team-identifier"] = profile.team }

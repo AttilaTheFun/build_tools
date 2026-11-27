@@ -364,9 +364,10 @@ public struct AppleSigner: Sendable {
 
     /// BuildVariant set and `additions`' Info.plist keys added (one already there with another value refused), the
     /// plist's format kept; a Mac app's stapled ticket (Contents/CodeResources) taken out, its signature being made
-    /// again. Only the added keys' count is said, never their values.
-    func stamp(_ app: String, info path: String) throws {
-        guard variant != nil || !additions.infoPlist.isEmpty else { return }
+    /// again. What it says, returned and printed: BuildVariant, and only the added keys' count, never their values.
+    @discardableResult
+    func stamp(_ app: String, info path: String) throws -> [String] {
+        guard variant != nil || !additions.infoPlist.isEmpty else { return [] }
         guard let data = FileManager.default.contents(atPath: path) else { throw SignError("no Info.plist in \((app as NSString).lastPathComponent)") }
         guard var info = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
             throw SignError("\((app as NSString).lastPathComponent)'s Info.plist isn't a dictionary")
@@ -376,8 +377,11 @@ public struct AppleSigner: Sendable {
         // Written as XML, whatever it came as (Apple's platforms read either): PlistXML, not Foundation's bridging.
         try PlistXML.data(info).write(to: URL(fileURLWithPath: path))
         try? FileManager.default.removeItem(atPath: (app as NSString).appendingPathComponent("Contents/CodeResources"))
-        if let variant { print("   BuildVariant: \(variant)") }
-        if !additions.infoPlist.isEmpty { print("   Info.plist: \(additions.infoPlist.count) key\(additions.infoPlist.count == 1 ? "" : "s") added") }
+        var said: [String] = []
+        if let variant { said.append("   BuildVariant: \(variant)") }
+        if !additions.infoPlist.isEmpty { said.append("   Info.plist: \(additions.infoPlist.count) key\(additions.infoPlist.count == 1 ? "" : "s") added") }
+        for line in said { print(line) }
+        return said
     }
 
     /// A bundle's steps for a profile `kind` (refused, saying why, where none fits).
@@ -442,6 +446,7 @@ public struct AppleSigner: Sendable {
     /// (an experiment's from a branch, which gets no keys; Isomer's `run: experiment`): no keys, no stamp, its
     /// variant whatever its bundle carries.
     public func copyUnsigned(_ packages: [String], out: String) async throws -> [Signed] {
+        guard additions.isEmpty else { throw SignError("--unsigned adds nothing: --add-infoplist and --add-groups are for signing") }
         guard let unzip = Tool.find("unzip") else { throw SignError("unzip is needed on PATH") }
         try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
         let work = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("apple-unsigned-\(UUID().uuidString)").path
