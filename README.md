@@ -99,6 +99,28 @@ draft_release.sh and attach_release.sh. It talks to GitHub's REST API itself (no
   release waited for a minute if it isn't listed yet, and `builds.json` last; a folder without it may hold only the
   proof (`proof.zip`, `proof-diff.json`).
 
+## ci-bazel
+
+Bazel in a CI container, with Nimbus' settings for the runner: what each private repository's
+`tools/ci/container_build.sh` was (nimbus, shireworks, overcast, images, github_drive carried copies). Builds in a Linux
+container only. The exit status is Bazel's.
+
+- `ci-bazel [--bazelrc <file>] <build|test|…> <bazel arguments…>` runs `bazel --bazelrc=<rc> <verb> --keep_going
+  <arguments>` in the current folder (the checkout). Bazel's own options go straight through (`--noremote_upload_local_results`,
+  `--compilation_mode=opt`). The log says the container's CPUs and memory before, and how long the build took and the
+  container's peak memory (cgroup v2's `memory.peak`) after: what sizes CI's runners.
+- `ci-bazel [--bazelrc <file>] package <folder> <bazel arguments…>` builds, then copies the targets' files into
+  `<folder>`, which must be inside the checkout (its files are replaced; its folders stay): what a job signs and
+  publishes. The arguments' options (words that start with `-`, each in the one-word form `--name=value`) apply to the
+  build and to finding its files (`bazel info execution_root`, `bazel cquery --output=files`); the other words are the
+  targets, one union for cquery.
+- **The bazelrc** comes from Nimbus: the tool runs `nimbus job bazel-config` (the runner's own
+  `/opt/nimbus/bin/nimbus`) and takes the path it prints on its last line. That bazelrc holds the downloader config that
+  sends the Xcode SDK and rules_applecross' ported tools to the server's files (no repository pins their SHA-256), the
+  runner's size, and `--config=apple_on_linux`. `--bazelrc <file>` names one instead (Nimbus' command is only asked
+  without it).
+- Like `sign`, it is built by Bazel in a step of its own, with no secret in the environment, and run directly.
+
 ## Pinned tools
 
 `sign` runs the repository's own pinned tools, never one it downloads. These are the versions it's tested with
