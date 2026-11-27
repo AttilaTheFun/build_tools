@@ -13,6 +13,8 @@ public struct ApplePlan {
         public var profile: String?
         /// Where the profile is embedded.
         public var embed: String?
+        /// Its profile's App ID prefix, which `$(AppIdentifierPrefix)` is filled with (#21); nil without a profile.
+        public var prefix: String? = nil
     }
 
     public enum Platform: Sendable { case ios, mac }
@@ -50,9 +52,9 @@ public struct ApplePlan {
                 let identifier = code == app ? appID : try AppleBundle.bundleID(code)
                 guard let profile = chosen[identifier] else { throw SignError("no profile chosen for \(identifier)") }
                 let values = try entitlements(own: try await own(code), bundle: identifier, profile: profile,
-                                              additions: code == app ? additions : .none)
+                                              additions: code == app ? try additions.filled(prefix: profile.prefix) : .none)
                 steps.append(Step(path: code, bundle: true, entitlements: try xml(values), profile: profile.path,
-                                  embed: (code as NSString).appendingPathComponent("embedded.mobileprovision")))
+                                  embed: (code as NSString).appendingPathComponent("embedded.mobileprovision"), prefix: profile.prefix))
             }
         case .mac:
             for code in nested { steps.append(Step(path: code, bundle: AppleBundle.isFolder(code))) }
@@ -67,13 +69,16 @@ public struct ApplePlan {
                                 + AppleProfile.described(profiles, appID, certificate: certificate, now: now))
             }
             if let profile = candidates.max(by: { $0.expires < $1.expires }) {
+                let filled = try additions.filled(prefix: profile.prefix)
                 steps.append(Step(path: app, bundle: true,
-                                  entitlements: try xml(entitlements(own: ownValues, bundle: appID, profile: profile, additions: additions)),
-                                  profile: profile.path, embed: (app as NSString).appendingPathComponent("Contents/embedded.provisionprofile")))
+                                  entitlements: try xml(entitlements(own: ownValues, bundle: appID, profile: profile, additions: filled)),
+                                  profile: profile.path, embed: (app as NSString).appendingPathComponent("Contents/embedded.provisionprofile"),
+                                  prefix: profile.prefix))
             } else {
                 // Without a profile, an entitlement Apple restricts has macOS kill the app at launch (AMFI), which
                 // notarizing doesn't catch: refused here instead (a keychain group added among them).
-                let values = additions.applied(to: ownValues, bundle: appID)
+                // No profile: no prefix for `$(AppIdentifierPrefix)`, so a value using it is refused (#21).
+                let values = try additions.filled(prefix: nil).applied(to: ownValues, bundle: appID)
                 let restricted = values.filter { restrictedOnMac($0.key, $0.value) }.keys.sorted()
                 guard restricted.isEmpty else {
                     throw SignError("\(appID) asks for \(restricted.joined(separator: ", ")), which only a Developer ID profile allows, and there's "
