@@ -386,13 +386,16 @@ private func profileXML(team: String, bundle: String) -> String {
     let steps = try await ApplePlan.steps(app: app.path, platform: .ios, profiles: profiles, certificate: certificateSHA,
                                           kinds: [.development], additions: additions) { _ in [:] }
     func entitlements(_ step: ApplePlan.Step) throws -> [String: Any] {
-        try #require(PropertyListSerialization.propertyList(from: try #require(step.entitlements), format: nil) as? [String: Any])
+        let data = try #require(step.entitlements)
+        return try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
     }
-    let outer = try entitlements(try #require(steps.last))
+    let last = try #require(steps.last)
+    let outer = try entitlements(last)
     #expect(outer["com.apple.security.application-groups"] as? [String] == ["\(team).shared"])
     // The profile's wildcard keychain group made the app's own, first; the added one after it.
     #expect(outer["keychain-access-groups"] as? [String] == ["\(team).com.example.App", "\(team).com.example.shared"])
-    let share = try entitlements(try #require(steps.first { $0.path.hasSuffix("Share.appex") }))
+    let shareStep = try #require(steps.first { $0.path.hasSuffix("Share.appex") })
+    let share = try entitlements(shareStep)
     #expect(share["keychain-access-groups"] as? [String] == ["\(team).com.example.App.Share"])
     #expect(share["com.apple.security.application-groups"] as? [String] == ["\(team).shared"])
     // A group the profile doesn't allow: refused, saying how many, never which.
