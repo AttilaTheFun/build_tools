@@ -17,6 +17,9 @@ let package = Package(
         .executable(name: "tests-proof", targets: ["tests-proof"]),
         // A release's steps in its CI job: the build's version, the line's check, the draft and its assets.
         .executable(name: "release", targets: ["release"]),
+        // Bazel in a CI container with Nimbus' settings for the runner: build, test, or package (the targets' files
+        // copied into a folder). What each private repository's tools/ci/container_build.sh was.
+        .executable(name: "ci-bazel", targets: ["ci-bazel"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
@@ -59,6 +62,16 @@ let package = Package(
             name: "release",
             dependencies: ["ReleaseKit", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
         .testTarget(name: "ReleaseKitTests", dependencies: ["ReleaseKit"]),
+        .target(
+            name: "BazelCIKit",
+            dependencies: [
+                .product(name: "Subprocess", package: "swift-subprocess"),
+                .product(name: "SystemPackage", package: "swift-system", condition: .when(platforms: [.linux])),
+            ]),
+        .executableTarget(
+            name: "ci-bazel",
+            dependencies: ["BazelCIKit", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
+        .testTarget(name: "BazelCIKitTests", dependencies: ["BazelCIKit"]),
     ],
     swiftLanguageModes: [.v6]
 )
