@@ -488,3 +488,63 @@ private func profileXML(team: String, bundle: String) -> String {
                                  additions: try AppleAdditions(appGroups: ["\(team).shared"]))
     await #expect(throws: SignError.self) { try await signer.copyUnsigned(["/nonexistent.zip"], out: "/tmp/never") }
 }
+
+// $(AppIdentifierPrefix) in the added values (#21): filled for each top-level app from its chosen profile's prefix, so a
+// signing job needs no team of its own; refused for a Mac app with no profile.
+
+@Test func thePrefixPlaceholderIsFilledFromTheProfileOrRefused() throws {
+    let additions = try AppleAdditions(infoPlist: ["SharedKeychainGroup": .string("$(AppIdentifierPrefix)com.example.shared"),
+                                                    "Groups": .strings(["$(AppIdentifierPrefix)one", "plain"])],
+                                       appGroups: ["$(AppIdentifierPrefix)app.shared"],
+                                       keychainGroups: ["$(AppIdentifierPrefix)com.example.shared"])
+    #expect(additions.usesPrefix)
+    let filled = try additions.filled(prefix: team)
+    #expect(filled.infoPlist["SharedKeychainGroup"] == .string("\(team).com.example.shared"))
+    #expect(filled.infoPlist["Groups"] == .strings(["\(team).one", "plain"]))
+    #expect(filled.appGroups == ["\(team).app.shared"] && filled.keychainGroups == ["\(team).com.example.shared"])
+    #expect(!filled.usesPrefix)
+    // No profile to take it from: refused.
+    #expect(throws: SignError.self) { try additions.filled(prefix: nil) }
+    // None used: as it was, with or without a prefix.
+    let plain = try AppleAdditions(appGroups: ["\(team).shared"])
+    #expect(try plain.filled(prefix: nil) == plain)
+    // A keychain group of only the placeholder and nothing after it isn't one.
+    #expect(throws: SignError.self) { try AppleAdditions(keychainGroups: ["$(AppIdentifierPrefix)"]) }
+}
+
+@Test func thePlanFillsThePlaceholderWithTheChosenProfilesPrefix() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("build-tools-prefix-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let app = root.appendingPathComponent("App.app")
+    try makeBundle(app, id: "com.example.App")
+    let profiles = [try profile("com.example.App", kind: .development)]
+    let additions = try AppleAdditions(keychainGroups: ["$(AppIdentifierPrefix)com.example.shared"])
+    let steps = try await ApplePlan.steps(app: app.path, platform: .ios, profiles: profiles, certificate: certificateSHA,
+                                          kinds: [.development], additions: additions) { _ in [:] }
+    let last = try #require(steps.last)
+    #expect(last.prefix == team)
+    let data = try #require(last.entitlements)
+    let entitlements = try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+    #expect(entitlements["keychain-access-groups"] as? [String] == ["\(team).com.example.App", "\(team).com.example.shared"])
+    // A Mac app with no profile using it, even only in the Info.plist: refused.
+    let mac = root.appendingPathComponent("Mac.app")
+    try makeBundle(mac, id: "com.example.Mac", mac: true)
+    await #expect(throws: SignError.self) {
+        try await ApplePlan.steps(app: mac.path, platform: .mac, profiles: [], certificate: certificateSHA, kinds: [.developerID],
+                                  additions: try AppleAdditions(infoPlist: ["Group": .string("$(AppIdentifierPrefix)x")])) { _ in [:] }
+    }
+}
+
+@Test func stampFillsThePlaceholderInTheInfoPlist() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("build-tools-stamp-prefix-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let app = root.appendingPathComponent("Mac.app")
+    try makeBundle(app, id: "com.example.Mac", mac: true)
+    let infoPath = app.appendingPathComponent("Contents/Info.plist").path
+    let signer = try AppleSigner(rcodesign: nil, dmg: nil, ipaKinds: [.development], variant: nil, app: nil,
+                                 additions: try AppleAdditions(infoPlist: ["SharedKeychainGroup": .string("$(AppIdentifierPrefix)com.example.shared")]))
+    #expect(throws: SignError.self) { try signer.stamp(app.path, info: infoPath) }
+    let said = try signer.stamp(app.path, info: infoPath, prefix: team)
+    #expect(AppleBundle.info(app.path)?["SharedKeychainGroup"] as? String == "\(team).com.example.shared")
+    #expect(!said.joined().contains("com.example.shared"))
+}

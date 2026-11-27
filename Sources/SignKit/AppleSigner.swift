@@ -238,7 +238,6 @@ public struct AppleSigner: Sendable {
                 let apps = ((try? FileManager.default.contentsOfDirectory(atPath: payload)) ?? []).filter { $0.hasSuffix(".app") }
                 guard apps.count == 1 else { throw SignError("\(base).ipa holds \(apps.count) apps in its Payload, not one") }
                 let appPath = (payload as NSString).appendingPathComponent(apps[0])
-                try stamp(appPath, info: (appPath as NSString).appendingPathComponent("Info.plist"))
                 // The first kind that has its identity here and a profile for every bundle.
                 var chosen: (kind: IPAKind, steps: [ApplePlan.Step])?
                 var refusals: [String] = []
@@ -252,6 +251,8 @@ public struct AppleSigner: Sendable {
                 }
                 guard let chosen else { throw SignError("\(base).ipa: no kind fits:\n" + refusals.joined(separator: "\n")) }
                 print("== \(base).ipa: signed (\(chosen.kind.rawValue))")
+                // Stamped once its profile is chosen: `$(AppIdentifierPrefix)` is that profile's prefix (#21).
+                try stamp(appPath, info: (appPath as NSString).appendingPathComponent("Info.plist"), prefix: chosen.steps.last?.prefix)
                 try await carryOut(chosen.steps, platform: .ios, p12: file("\(chosen.kind.identity)-p12"), password: file("\(chosen.kind.identity)-password"), work: work)
                 let info = AppleBundle.info(appPath) ?? [:]
                 let target = (out as NSString).appendingPathComponent(outputName(base: base, info: info, platform: "ios", ext: "ipa"))
@@ -264,8 +265,9 @@ public struct AppleSigner: Sendable {
                 guard apps.count == 1 else { throw SignError("\(base).zip holds \(apps.count) apps at its top, not one") }
                 let appPath = (folder as NSString).appendingPathComponent(apps[0])
                 print("== \(apps[0]): " + (macKind.notarized ? "signed, notarized, stapled" : "signed (development)"))
-                try stamp(appPath, info: (appPath as NSString).appendingPathComponent("Contents/Info.plist"))
                 let steps = try await plan(appPath, platform: .mac, kind: macKind.profile, certificate: developerID, profiles: profiles)
+                // Stamped once its profile is chosen: `$(AppIdentifierPrefix)` is that profile's prefix (#21).
+                try stamp(appPath, info: (appPath as NSString).appendingPathComponent("Contents/Info.plist"), prefix: steps.last?.prefix)
                 try await carryOut(steps, platform: .mac, p12: file("\(macKind.identity)-p12"), password: file("\(macKind.identity)-password"),
                                    work: work, forNotarization: macKind.notarized)
                 if macKind.notarized { try await notarize(appPath, key: file("notary.json")) }
@@ -365,14 +367,15 @@ public struct AppleSigner: Sendable {
     /// BuildVariant set and `additions`' Info.plist keys added (one already there with another value refused), the
     /// plist's format kept; a Mac app's stapled ticket (Contents/CodeResources) taken out, its signature being made
     /// again. What it says, returned and printed: BuildVariant, and only the added keys' count, never their values.
+    /// `prefix`: the app's chosen profile's App ID prefix, for `$(AppIdentifierPrefix)` in the added values (#21).
     @discardableResult
-    func stamp(_ app: String, info path: String) throws -> [String] {
+    func stamp(_ app: String, info path: String, prefix: String? = nil) throws -> [String] {
         guard variant != nil || !additions.infoPlist.isEmpty else { return [] }
         guard let data = FileManager.default.contents(atPath: path) else { throw SignError("no Info.plist in \((app as NSString).lastPathComponent)") }
         guard var info = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
             throw SignError("\((app as NSString).lastPathComponent)'s Info.plist isn't a dictionary")
         }
-        info = try additions.merged(into: info)
+        info = try additions.filled(prefix: prefix).merged(into: info)
         if let variant { info["BuildVariant"] = variant }
         // Written as XML, whatever it came as (Apple's platforms read either): PlistXML, not Foundation's bridging.
         try PlistXML.data(info).write(to: URL(fileURLWithPath: path))

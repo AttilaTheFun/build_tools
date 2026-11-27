@@ -38,6 +38,10 @@ public struct AppleAdditions: Sendable, Equatable {
 
     public var isEmpty: Bool { infoPlist.isEmpty && appGroups.isEmpty && keychainGroups.isEmpty }
 
+    /// Written in a value, the app's App ID prefix and its dot (`TEAM.`), filled from each top-level app's chosen
+    /// profile (#21), as Xcode fills it: so a signing job needs no team of its own to spell a group.
+    public static let prefixPlaceholder = "$(AppIdentifierPrefix)"
+
     /// The Info.plist keys `sign apple` sets itself, which `--add-infoplist` may not (Manager's review of #20).
     public static let ownKeys: Set<String> = ["BuildVariant"]
 
@@ -48,7 +52,7 @@ public struct AppleAdditions: Sendable, Equatable {
         for (index, group) in appGroups.enumerated() where group.isEmpty || group.contains(where: { $0.isWhitespace || $0 == "/" }) {
             throw SignError("--add-groups' app group number \(index + 1) isn't an app group")
         }
-        for (index, group) in keychainGroups.enumerated() where Self.team(of: group) == nil {
+        for (index, group) in keychainGroups.enumerated() where Self.team(of: Self.placeholderFilled(group, prefix: "ABCDEFGHIJ")) == nil {
             throw SignError("--add-groups' keychain group number \(index + 1) isn't <TEAM>.<group>, TEAM its team's ten capital letters and digits")
         }
         for key in infoPlist.keys.sorted() where Self.ownKeys.contains(key) {
@@ -133,6 +137,40 @@ public struct AppleAdditions: Sendable, Equatable {
             index += 1
         }
         return nil
+    }
+
+    /// Whether a value anywhere uses `$(AppIdentifierPrefix)`.
+    public var usesPrefix: Bool {
+        let values = appGroups + keychainGroups + infoPlist.values.flatMap { value -> [String] in
+            switch value {
+            case .string(let text): [text]
+            case .strings(let texts): texts
+            }
+        }
+        return values.contains { $0.contains(Self.prefixPlaceholder) }
+    }
+
+    /// `text` with `$(AppIdentifierPrefix)` made `<prefix>.`.
+    static func placeholderFilled(_ text: String, prefix: String) -> String {
+        text.replacingOccurrences(of: prefixPlaceholder, with: prefix + ".")
+    }
+
+    /// These additions for one top-level app: `$(AppIdentifierPrefix)` filled with its chosen profile's prefix (#21).
+    /// Refused where a value uses it and the app has no profile to take it from (a Mac app signed without one).
+    func filled(prefix: String?) throws -> AppleAdditions {
+        guard usesPrefix else { return self }
+        guard let prefix else {
+            throw SignError("--add-groups or --add-infoplist uses \(Self.prefixPlaceholder), but the app has no provisioning profile to "
+                            + "take its prefix from")
+        }
+        let info = infoPlist.mapValues { value -> Value in
+            switch value {
+            case .string(let text): .string(Self.placeholderFilled(text, prefix: prefix))
+            case .strings(let texts): .strings(texts.map { Self.placeholderFilled($0, prefix: prefix) })
+            }
+        }
+        return try AppleAdditions(infoPlist: info, appGroups: appGroups.map { Self.placeholderFilled($0, prefix: prefix) },
+                                  keychainGroups: keychainGroups.map { Self.placeholderFilled($0, prefix: prefix) })
     }
 
     /// A keychain group's team: its prefix, ten capital letters or digits, before a dot and more.

@@ -67,7 +67,10 @@ tool ends.
     groups appended once to `com.apple.security.application-groups` (made where there's none), keychain groups
     (`<TEAM>.<group>`) appended last to `keychain-access-groups`, after the app's own (where it has none, its
     profile's `<prefix>.<bundle id>` first, so the app still saves to its own group by default). Files, never the
-    command line, where another process or a step echoing it would see them. The groups go in before its profile is
+    command line, where another process or a step echoing it would see them. A value may hold
+    `$(AppIdentifierPrefix)`, which is filled with each top-level app's chosen profile's prefix and its dot
+    (`TEAM.`), as Xcode fills it, so the signing job needs no team of its own; a Mac app with no profile using it is
+    refused. The groups go in before its profile is
     checked, and one the profile doesn't allow is refused. Only the outer app gets them, never its extensions, and
     nothing of their values is printed: a refusal says which file and how many, never what.
   - `--unsigned` (an experiment's, from a branch with no keys): each Apple package copied out as built, named and
