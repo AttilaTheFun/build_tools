@@ -94,9 +94,12 @@ public struct AppleSigner: Sendable {
     /// The app's name across platforms: outputs named `<App>-<version>-<platform>.<ext>` (shireworks'
     /// RELEASE_ASSETS.md), else each package's own name.
     public let app: String?
+    /// What each outer app gets just before it's signed: Info.plist keys, app groups and keychain groups
+    /// (AppleAdditions), never printed.
+    public let additions: AppleAdditions
 
     public init(rcodesign: String?, dmg: String?, ipaKinds: [IPAKind], macKind: MacKind = .developerID, variant: String?, app: String?,
-                skipMissingKeys: Bool = false, commit: String? = nil) throws {
+                skipMissingKeys: Bool = false, commit: String? = nil, additions: AppleAdditions = .none) throws {
         guard !ipaKinds.isEmpty else { throw SignError("--ipa-kind names at least one kind") }
         if dmg != nil, macKind == .development { throw SignError("--dmg is for a Developer ID Mac app: a development one isn't notarized") }
         if let rcodesign { guard FileManager.default.isExecutableFile(atPath: rcodesign) else { throw SignError("no rcodesign at \(rcodesign)") } }
@@ -111,6 +114,7 @@ public struct AppleSigner: Sendable {
         self.commit = commit
         self.variant = variant
         self.app = app
+        self.additions = additions
     }
 
     static func validVariant(_ variant: String) -> Bool {
@@ -358,26 +362,34 @@ public struct AppleSigner: Sendable {
         }
     }
 
-    /// BuildVariant set, the plist's format kept; a Mac app's stapled ticket (Contents/CodeResources) taken out, its
-    /// signature being made again.
-    func stamp(_ app: String, info path: String) throws {
-        guard let variant else { return }
+    /// BuildVariant set and `additions`' Info.plist keys added (one already there with another value refused), the
+    /// plist's format kept; a Mac app's stapled ticket (Contents/CodeResources) taken out, its signature being made
+    /// again. What it says, returned and printed: BuildVariant, and only the added keys' count, never their values.
+    @discardableResult
+    func stamp(_ app: String, info path: String) throws -> [String] {
+        guard variant != nil || !additions.infoPlist.isEmpty else { return [] }
         guard let data = FileManager.default.contents(atPath: path) else { throw SignError("no Info.plist in \((app as NSString).lastPathComponent)") }
         guard var info = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
             throw SignError("\((app as NSString).lastPathComponent)'s Info.plist isn't a dictionary")
         }
-        info["BuildVariant"] = variant
+        info = try additions.merged(into: info)
+        if let variant { info["BuildVariant"] = variant }
         // Written as XML, whatever it came as (Apple's platforms read either): PlistXML, not Foundation's bridging.
         try PlistXML.data(info).write(to: URL(fileURLWithPath: path))
         try? FileManager.default.removeItem(atPath: (app as NSString).appendingPathComponent("Contents/CodeResources"))
-        print("   BuildVariant: \(variant)")
+        var said: [String] = []
+        if let variant { said.append("   BuildVariant: \(variant)") }
+        if !additions.infoPlist.isEmpty { said.append("   Info.plist: \(additions.infoPlist.count) key\(additions.infoPlist.count == 1 ? "" : "s") added") }
+        for line in said { print(line) }
+        return said
     }
 
     /// A bundle's steps for a profile `kind` (refused, saying why, where none fits).
     func plan(_ app: String, platform: ApplePlan.Platform, kind: AppleProfile.Kind, certificate: String, profiles: [AppleProfile]) async throws
         -> [ApplePlan.Step] {
         let rcodesign = try self.rcodesign
-        return try await ApplePlan.steps(app: app, platform: platform, profiles: profiles, certificate: certificate, kinds: [kind]) { code in
+        return try await ApplePlan.steps(app: app, platform: platform, profiles: profiles, certificate: certificate, kinds: [kind],
+                                         additions: additions) { code in
             let target = AppleBundle.isFolder(code) ? AppleBundle.executable(code) : code
             guard let target else { return [:] }
             let info = try await rcodesign.run(["print-signature-info", target])
@@ -434,6 +446,7 @@ public struct AppleSigner: Sendable {
     /// (an experiment's from a branch, which gets no keys; Isomer's `run: experiment`): no keys, no stamp, its
     /// variant whatever its bundle carries.
     public func copyUnsigned(_ packages: [String], out: String) async throws -> [Signed] {
+        guard additions.isEmpty else { throw SignError("--unsigned adds nothing: --add-infoplist and --add-groups are for signing") }
         guard let unzip = Tool.find("unzip") else { throw SignError("unzip is needed on PATH") }
         try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
         let work = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("apple-unsigned-\(UUID().uuidString)").path

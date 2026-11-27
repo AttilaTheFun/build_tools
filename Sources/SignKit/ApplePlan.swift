@@ -21,9 +21,10 @@ public struct ApplePlan {
     public typealias OwnEntitlements = (_ code: String) async throws -> [String: Any]
 
     /// The steps for `app`, the deepest code first and the app last. Refuses, saying why, when a bundle has no profile
-    /// here naming the certificate, or its entitlements ask for one its profile doesn't allow.
+    /// here naming the certificate, or its entitlements ask for one its profile doesn't allow. `additions`' groups go
+    /// into the app's own entitlements (not its extensions'), before its profile is checked.
     public static func steps(app: String, platform: Platform, profiles all: [AppleProfile], certificate: String, kinds: [AppleProfile.Kind],
-                             now: Date = Date(), own: OwnEntitlements) async throws -> [Step] {
+                             now: Date = Date(), additions: AppleAdditions = .none, own: OwnEntitlements) async throws -> [Step] {
         let certificate = certificate.replacingOccurrences(of: ":", with: "").uppercased()
         let profiles = all.filter { $0.mac == (platform == .mac) }
         let nested = try AppleBundle.nestedCode(app)
@@ -48,7 +49,8 @@ public struct ApplePlan {
                 }
                 let identifier = code == app ? appID : try AppleBundle.bundleID(code)
                 guard let profile = chosen[identifier] else { throw SignError("no profile chosen for \(identifier)") }
-                let values = try entitlements(own: try await own(code), bundle: identifier, profile: profile)
+                let values = try entitlements(own: try await own(code), bundle: identifier, profile: profile,
+                                              additions: code == app ? additions : .none)
                 steps.append(Step(path: code, bundle: true, entitlements: try xml(values), profile: profile.path,
                                   embed: (code as NSString).appendingPathComponent("embedded.mobileprovision")))
             }
@@ -65,18 +67,20 @@ public struct ApplePlan {
                                 + AppleProfile.described(profiles, appID, certificate: certificate, now: now))
             }
             if let profile = candidates.max(by: { $0.expires < $1.expires }) {
-                steps.append(Step(path: app, bundle: true, entitlements: try xml(entitlements(own: ownValues, bundle: appID, profile: profile)),
+                steps.append(Step(path: app, bundle: true,
+                                  entitlements: try xml(entitlements(own: ownValues, bundle: appID, profile: profile, additions: additions)),
                                   profile: profile.path, embed: (app as NSString).appendingPathComponent("Contents/embedded.provisionprofile")))
             } else {
                 // Without a profile, an entitlement Apple restricts has macOS kill the app at launch (AMFI), which
-                // notarizing doesn't catch: refused here instead.
-                let restricted = ownValues.filter { restrictedOnMac($0.key, $0.value) }.keys.sorted()
+                // notarizing doesn't catch: refused here instead (a keychain group added among them).
+                let values = additions.applied(to: ownValues, bundle: appID)
+                let restricted = values.filter { restrictedOnMac($0.key, $0.value) }.keys.sorted()
                 guard restricted.isEmpty else {
                     throw SignError("\(appID) asks for \(restricted.joined(separator: ", ")), which only a Developer ID profile allows, and there's "
                                     + "no profile for it here naming the signing certificate: "
                                     + AppleProfile.described(profiles, appID, certificate: certificate, now: now))
                 }
-                steps.append(Step(path: app, bundle: true, entitlements: ownValues.isEmpty ? nil : try xml(ownValues)))
+                steps.append(Step(path: app, bundle: true, entitlements: values.isEmpty ? nil : try xml(values)))
             }
         }
         return steps
@@ -133,14 +137,20 @@ public struct ApplePlan {
         return result
     }
 
-    /// A bundle's entitlements made its profile's.
-    static func entitlements(own: [String: Any], bundle: String, profile: AppleProfile) throws -> [String: Any] {
+    /// A bundle's entitlements made its profile's: `additions`' groups added to them first (the outer app's alone), each
+    /// refused where the profile doesn't allow it.
+    static func entitlements(own: [String: Any], bundle: String, profile: AppleProfile, additions: AppleAdditions = .none) throws -> [String: Any] {
         let allowed = profile.entitlements
         let mac = profile.mac
         let identifierKey = mac ? "com.apple.application-identifier" : "application-identifier"
         let pushKey = mac ? "com.apple.developer.aps-environment" : "aps-environment"
         let debugKey = mac ? "com.apple.security.get-task-allow" : "get-task-allow"
-        var result = own.isEmpty ? concrete(allowed, prefix: profile.prefix, bundle: bundle) : own
+        if let refused = additions.refusal(allowed: allowed) {
+            throw SignError("\(bundle)'s profile (\(profile.name)) does not allow the \(refused): give its App ID those groups and make the "
+                            + "profile again")
+        }
+        var result = additions.applied(to: own.isEmpty ? concrete(allowed, prefix: profile.prefix, bundle: bundle) : own, bundle: bundle,
+                                       prefix: profile.prefix)
         let built = (own[identifierKey] as? String).flatMap { $0.contains(".") ? String($0.prefix { $0 != "." }) + "." : nil }
         result[identifierKey] = profile.prefix + "." + bundle
         if allowed["com.apple.developer.team-identifier"] != nil { result["com.apple.developer.team-identifier"] = profile.team }

@@ -324,3 +324,167 @@ private func profileXML(team: String, bundle: String) -> String {
     #expect(try await AppleProfile.team(keys: keys.path, bundle: "com.example.Images") == "TEAMA12345")
     await #expect(throws: SignError.self) { try await AppleProfile.team(keys: keys.path, bundle: "com.example.Missing") }
 }
+
+// --add-infoplist, --add-app-group and --add-keychain-group (AppleAdditions): what a build on runners with no secrets
+// left out, stamped into the outer app before it's signed (Isomer, 2026-11-27). None of their values is ever said.
+
+@Test func addedInfoPlistKeysAreStringsOrArraysOfStringsAndNeverOverwrite() throws {
+    let read = try AppleAdditions.infoPlist(json: Data(#"{"SharedClientID": "abc", "Distributors": ["com.example.A", "com.example.B"]}"#.utf8))
+    #expect(read == ["SharedClientID": .string("abc"), "Distributors": .strings(["com.example.A", "com.example.B"])])
+    #expect(throws: SignError.self) { try AppleAdditions.infoPlist(json: Data(#"{"Count": 3}"#.utf8)) }
+    #expect(throws: SignError.self) { try AppleAdditions.infoPlist(json: Data(#"["not", "an", "object"]"#.utf8)) }
+    let additions = try AppleAdditions(infoPlist: read)
+    let merged = try additions.merged(into: ["CFBundleIdentifier": "com.example.App", "SharedClientID": "abc"])
+    #expect(merged["SharedClientID"] as? String == "abc")
+    #expect(merged["Distributors"] as? [String] == ["com.example.A", "com.example.B"])
+    #expect(merged["CFBundleIdentifier"] as? String == "com.example.App")
+    // Already there with another value: refused, naming the key, never either value.
+    do {
+        _ = try additions.merged(into: ["SharedClientID": "something else"])
+        Issue.record("a different value was overwritten")
+    } catch let error as SignError {
+        #expect("\(error)".contains("SharedClientID") && !"\(error)".contains("abc") && !"\(error)".contains("something else"))
+    }
+}
+
+@Test func addedGroupsGoLastAfterTheAppsOwnEachOnce() throws {
+    let additions = try AppleAdditions(appGroups: ["\(team).shared", "\(team).shared"], keychainGroups: ["\(team).com.example.shared"])
+    // The app's own first: where it saves without naming a group.
+    let own: [String: Any] = ["keychain-access-groups": ["\(team).com.example.App"], "com.apple.security.application-groups": ["\(team).own"]]
+    let added = additions.applied(to: own, bundle: "com.example.App")
+    #expect(added["keychain-access-groups"] as? [String] == ["\(team).com.example.App", "\(team).com.example.shared"])
+    #expect(added["com.apple.security.application-groups"] as? [String] == ["\(team).own", "\(team).shared"])
+    // None of its own: its own group first, made from the added group's team, then the added one.
+    let none = additions.applied(to: [:], bundle: "com.example.App")
+    #expect(none["keychain-access-groups"] as? [String] == ["\(team).com.example.App", "\(team).com.example.shared"])
+    #expect(none["com.apple.security.application-groups"] as? [String] == ["\(team).shared"])
+    // Nothing added: nothing changed.
+    #expect(AppleAdditions.none.applied(to: own, bundle: "com.example.App")["keychain-access-groups"] as? [String] == ["\(team).com.example.App"])
+}
+
+@Test func aGroupThatIsntOneIsRefusedWithoutSayingIt() {
+    for (apps, keychains) in [([""], [String]()), (["has space"], []), ([], ["shared"]), ([], ["teamprefix.shared"]), ([], ["SHORT.shared"])] {
+        do {
+            _ = try AppleAdditions(appGroups: apps, keychainGroups: keychains)
+            Issue.record("\(apps) \(keychains) taken")
+        } catch {
+            #expect(!"\(error)".contains("shared") && !"\(error)".contains("has space"))
+        }
+    }
+}
+
+@Test func addedGroupsAreCheckedAgainstTheProfileAndOnlyTheAppGetsThem() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("build-tools-additions-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let app = root.appendingPathComponent("App.app")
+    try makeBundle(app, id: "com.example.App")
+    try makeBundle(app.appendingPathComponent("PlugIns/Share.appex"), id: "com.example.App.Share")
+    let groups: [String: Any] = ["com.apple.security.application-groups": ["\(team).shared"]]
+    let profiles = [try profile("com.example.App", kind: .development, entitlements: groups),
+                    try profile("com.example.App.Share", kind: .development, entitlements: groups)]
+    let additions = try AppleAdditions(appGroups: ["\(team).shared"], keychainGroups: ["\(team).com.example.shared"])
+    let steps = try await ApplePlan.steps(app: app.path, platform: .ios, profiles: profiles, certificate: certificateSHA,
+                                          kinds: [.development], additions: additions) { _ in [:] }
+    func entitlements(_ step: ApplePlan.Step) throws -> [String: Any] {
+        let data = try #require(step.entitlements)
+        return try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+    }
+    let last = try #require(steps.last)
+    let outer = try entitlements(last)
+    #expect(outer["com.apple.security.application-groups"] as? [String] == ["\(team).shared"])
+    // The profile's wildcard keychain group made the app's own, first; the added one after it.
+    #expect(outer["keychain-access-groups"] as? [String] == ["\(team).com.example.App", "\(team).com.example.shared"])
+    let shareStep = try #require(steps.first { $0.path.hasSuffix("Share.appex") })
+    let share = try entitlements(shareStep)
+    #expect(share["keychain-access-groups"] as? [String] == ["\(team).com.example.App.Share"])
+    #expect(share["com.apple.security.application-groups"] as? [String] == ["\(team).shared"])
+    // A group the profile doesn't allow: refused, saying how many, never which.
+    let stray = try AppleAdditions(appGroups: ["\(team).elsewhere"])
+    do {
+        _ = try await ApplePlan.steps(app: app.path, platform: .ios, profiles: profiles, certificate: certificateSHA,
+                                      kinds: [.development], additions: stray) { _ in [:] }
+        Issue.record("a group the profile doesn't allow was taken")
+    } catch let error as SignError {
+        #expect("\(error)".contains("1 app group added") && !"\(error)".contains("elsewhere"))
+    }
+    // A Mac app with no profile: a keychain group added needs one, so it's refused as its own would be.
+    let mac = root.appendingPathComponent("Mac.app")
+    try makeBundle(mac, id: "com.example.Mac", mac: true)
+    await #expect(throws: SignError.self) {
+        try await ApplePlan.steps(app: mac.path, platform: .mac, profiles: [], certificate: certificateSHA, kinds: [.developerID],
+                                  additions: try AppleAdditions(keychainGroups: ["\(team).com.example.shared"])) { _ in [:] }
+    }
+}
+
+// Manager's review of #20: groups from a file, never argv; BuildVariant and repeated keys refused; the default keychain
+// group the profile's; stamp saying no values; --unsigned refusing additions.
+
+@Test func groupsComeFromAFileAndEachKeyOnce() throws {
+    let groups = try AppleAdditions.groups(json: Data(#"{"app": ["\#(team).shared"], "keychain": ["\#(team).com.example.shared"]}"#.utf8))
+    #expect(groups.app == ["\(team).shared"] && groups.keychain == ["\(team).com.example.shared"])
+    #expect(try AppleAdditions.groups(json: Data(#"{"keychain": []}"#.utf8)).app.isEmpty)
+    for bad in [#"{"apps": ["x"]}"#, #"{"app": "\#(team).shared"}"#, #"{"app": [3]}"#, #"["\#(team).shared"]"#,
+                #"{"app": ["\#(team).one"], "app": ["\#(team).two"]}"#] {
+        do {
+            _ = try AppleAdditions.groups(json: Data(bad.utf8))
+            Issue.record("\(bad) taken")
+        } catch {
+            #expect(!"\(error)".contains("shared") && !"\(error)".contains(".one") && !"\(error)".contains(".two"))
+        }
+    }
+    // A key twice: JSONSerialization would keep the last, silently; refused, naming the key alone.
+    #expect(throws: SignError.self) { try AppleAdditions.infoPlist(json: Data(#"{"A": "one", "B": {"A": "x"}, "A": "two"}"#.utf8)) }
+    #expect(AppleAdditions.repeatedKey(Data(#"{"A": "one", "B": {"A": "x"}, "C": "A:"}"#.utf8)) == nil)
+    #expect(AppleAdditions.repeatedKey(Data(#"{"A\"": 1, "A\"": 2}"#.utf8)) == "A\"")
+}
+
+@Test func buildVariantIsTheToolsAndCantBeAdded() throws {
+    let values = try AppleAdditions.infoPlist(json: Data(#"{"BuildVariant": "Production"}"#.utf8))
+    #expect(throws: SignError.self) { try AppleAdditions(infoPlist: values) }
+}
+
+@Test func theDefaultKeychainGroupIsTheProfilesAndOneItRefusesIsSaidByCount() throws {
+    let mac = try profile("com.example.Mac", mac: true, kind: .developerID,
+                          entitlements: ["keychain-access-groups": ["\(team).*", "OTHERTEAM1.*"]])
+    // Its own entitlements, no keychain group: the profile's prefix first, not the added group's team.
+    let added = try AppleAdditions(keychainGroups: ["OTHERTEAM1.shared"])
+    let made = try ApplePlan.entitlements(own: ["com.apple.security.app-sandbox": true], bundle: "com.example.Mac", profile: mac, additions: added)
+    #expect(made["keychain-access-groups"] as? [String] == ["\(team).com.example.Mac", "OTHERTEAM1.shared"])
+    // A keychain group no profile pattern allows: refused, by count.
+    let stray = try AppleAdditions(keychainGroups: ["ZZZZZZZZZZ.secret"])
+    do {
+        _ = try ApplePlan.entitlements(own: [:], bundle: "com.example.Mac", profile: mac, additions: stray)
+        Issue.record("a keychain group the profile doesn't allow was taken")
+    } catch let error as SignError {
+        #expect("\(error)".contains("1 keychain group added") && !"\(error)".contains("secret") && !"\(error)".contains("ZZZZ"))
+    }
+}
+
+@Test func stampAddsTheKeysAndSaysNoneOfTheirValues() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("build-tools-stamp-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let app = root.appendingPathComponent("Mac.app")
+    try makeBundle(app, id: "com.example.Mac", mac: true)
+    let infoPath = app.appendingPathComponent("Contents/Info.plist").path
+    let additions = try AppleAdditions(infoPlist: ["SharedClientID": .string("client-secret-value"),
+                                                    "Distributors": .strings(["com.example.hidden"])])
+    let signer = try AppleSigner(rcodesign: nil, dmg: nil, ipaKinds: [.development], variant: "Production", app: nil, additions: additions)
+    let said = try signer.stamp(app.path, info: infoPath)
+    let info = try #require(AppleBundle.info(app.path))
+    #expect(info["SharedClientID"] as? String == "client-secret-value")
+    #expect(info["Distributors"] as? [String] == ["com.example.hidden"])
+    #expect(info["BuildVariant"] as? String == "Production" && info["CFBundleIdentifier"] as? String == "com.example.Mac")
+    #expect(said == ["   BuildVariant: Production", "   Info.plist: 2 keys added"])
+    #expect(!said.joined().contains("client-secret-value") && !said.joined().contains("hidden"))
+    // Its own value already there, another: refused, the plist left as it was.
+    let other = try AppleSigner(rcodesign: nil, dmg: nil, ipaKinds: [.development], variant: nil, app: nil,
+                                additions: try AppleAdditions(infoPlist: ["SharedClientID": .string("another")]))
+    #expect(throws: SignError.self) { try other.stamp(app.path, info: infoPath) }
+    #expect(AppleBundle.info(app.path)?["SharedClientID"] as? String == "client-secret-value")
+}
+
+@Test func unsignedCopiesRefuseAdditions() async throws {
+    let signer = try AppleSigner(rcodesign: nil, dmg: nil, ipaKinds: [.development], variant: nil, app: nil,
+                                 additions: try AppleAdditions(appGroups: ["\(team).shared"]))
+    await #expect(throws: SignError.self) { try await signer.copyUnsigned(["/nonexistent.zip"], out: "/tmp/never") }
+}
