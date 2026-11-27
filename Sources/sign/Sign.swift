@@ -65,6 +65,15 @@ struct Apple: AsyncParsableCommand {
     @Option(help: "The app's name across platforms: outputs named <App>-<version>-<platform>.<ext>.")
     var app: String?
 
+    @Option(help: "A JSON object (strings or arrays of strings) merged into the outer app's Info.plist before it's signed; a key already there with another value is refused. Its values are never printed.")
+    var addInfoplist: String?
+
+    @Option(help: "An app group appended, once, to the outer app's com.apple.security.application-groups (made where there's none), before its profile is checked. Repeatable.")
+    var addAppGroup: [String] = []
+
+    @Option(help: "A keychain group, <TEAM>.<group>, appended last to the outer app's keychain-access-groups (where it has none, <TEAM>.<bundle id> first), before its profile is checked. Repeatable.")
+    var addKeychainGroup: [String] = []
+
     @Option(help: "A file each output's builds.json line is appended to, as one line of JSON.")
     var describe: String?
 
@@ -105,9 +114,18 @@ struct Apple: AsyncParsableCommand {
         guard let mac = AppleSigner.MacKind(rawValue: macKind) else {
             throw ValidationError("--mac-kind is \(AppleSigner.MacKind.allCases.map(\.rawValue).joined(separator: " or "))")
         }
+        if unsigned, addInfoplist != nil || !addAppGroup.isEmpty || !addKeychainGroup.isEmpty {
+            throw ValidationError("--unsigned adds nothing: --add-infoplist, --add-app-group and --add-keychain-group are for signing")
+        }
         do {
+            var infoPlist: [String: AppleAdditions.Value] = [:]
+            if let addInfoplist {
+                guard let data = FileManager.default.contents(atPath: addInfoplist) else { throw SignError("--add-infoplist: no file at \(addInfoplist)") }
+                infoPlist = try AppleAdditions.infoPlist(json: data)
+            }
+            let additions = try AppleAdditions(infoPlist: infoPlist, appGroups: addAppGroup, keychainGroups: addKeychainGroup)
             let signer = try AppleSigner(rcodesign: rcodesign, dmg: dmg, ipaKinds: kinds, macKind: mac, variant: variant, app: app,
-                                         skipMissingKeys: skipMissingKeys, commit: commit)
+                                         skipMissingKeys: skipMissingKeys, commit: commit, additions: additions)
             let signed: [AppleSigner.Signed]
             if let source {
                 signed = try await signer.sign(packages, out: out, keys: source)
