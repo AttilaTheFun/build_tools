@@ -86,6 +86,9 @@ final class SignalRelease: @unchecked Sendable {
             let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
             source.setEventHandler {
                 FileHandle.standardError.write(Data("mac-vm: stopped by signal \(number); releasing the lease\n".utf8))
+                // Its own ssh or tar first: a signal sent to this process alone (not its group) would leave them running
+                // after it exits, ssh to a VM about to be deleted.
+                SignalRelease.signalChildren(number)
                 let done = DispatchSemaphore(value: 0)
                 Task {
                     await vm.release()
@@ -102,5 +105,20 @@ final class SignalRelease: @unchecked Sendable {
 
     func stop() {
         for source in sources { source.cancel() }
+    }
+
+    /// The signal to each process whose parent is this one (Linux's /proc; nothing where there is none). swift-subprocess
+    /// gives a child default dispositions, so it ends as it would have.
+    static func signalChildren(_ number: Int32) {
+        let me = getpid()
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: "/proc") else { return }
+        for entry in entries {
+            guard let pid = Int32(entry), pid != me,
+                  let stat = try? String(contentsOfFile: "/proc/\(entry)/stat", encoding: .utf8),
+                  let close = stat.lastIndex(of: ")") else { continue }
+            // After the command's name, in parentheses (which may hold spaces): state, then the parent's id.
+            let fields = stat[stat.index(after: close)...].split(separator: " ")
+            if fields.count > 1, Int32(fields[1]) == me { kill(pid, number) }
+        }
     }
 }

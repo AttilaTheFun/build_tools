@@ -210,6 +210,8 @@ public final class MacVM: Sendable {
         let leased = try await runner.run(nimbus, ["job", "lease", "macos", "--config=\(request.config)", "--minutes=\(minutes)",
                                                    "--key=\(key).pub", "--label=\(request.label)"], input: nil, output: .collected)
         guard leased.status == 0 else { throw MacVMError("nimbus job lease answered \(leased.status)") }
+        // A signal that lands while `nimbus job lease` runs finds nothing held yet, so that lease isn't released here:
+        // it ends when its 60 minutes do. The window is the lease call's few seconds.
         let lease = try VMLease.parse(leased.output)
         held.set(lease.id)
         log("mac-vm: leased \(lease.id)")
@@ -277,6 +279,8 @@ public final class MacVM: Sendable {
     }
 
     /// A path of the VM's copy back into the folder (followed links as their files); skipped, and said, if it's not there.
+    /// The VM's tar is trusted no further than the VM itself: the paths are the caller's, and GNU tar refuses members
+    /// with `..` or a leading `/` unless told otherwise.
     func copyBack(_ path: String, from lease: VMLease, into folder: String) async throws {
         let quoted = shellQuote(path)
         let fetched = try await runner.run("ssh", ssh(lease) + ["cd \(Self.remoteFolder) && [ -e \(quoted) ] && tar -chf - \(quoted)"],

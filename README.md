@@ -161,8 +161,13 @@ mac-vm --env ISOMER_PROOF=1 --out out/review --out out/junit.xml -- tools/ci/pro
 - The exit status is the command's (ssh's 255 when the VM couldn't be reached; 1 when the lease or the copy failed).
 - In a job with no network but Nimbus' proxy, the lease's `NIMBUS_SSH_PROXY_COMMAND` (Nimbus 0.25) takes ssh to the
   VM, with `ServerAliveInterval` keeping a quiet connection open.
-- **No secret goes in.** Nimbus' VMs aren't network-locked, so `--env` is for settings, never keys; the tool prints no
-  value of the lease's or of `--env`.
+- **No secret goes in.** Nimbus' VMs aren't network-locked, and `--env` values travel on ssh's command line (seen by
+  `ps` on the runner and in the VM), so `--env` is for settings, never keys. The tool prints no value of the lease's or
+  of `--env`.
+- The lease's label is the job's `GITHUB_REPOSITORY GITHUB_JOB` (`--label` names another), so Nimbus' lease list says
+  whose it is: a release job's lease reads `<owner>/<repository> release-apple`, say.
+- A signal stops the tool's own `ssh` or `tar` before the lease is released. One that lands during `nimbus job lease`
+  itself leaves that lease to end with its time.
 
 ## Pinned tools
 
