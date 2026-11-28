@@ -137,6 +137,38 @@ container only. The exit status is Bazel's.
   names one instead (Nimbus' command is only asked without it).
 - Like `sign`, it is built by Bazel in a step of its own, with no secret in the environment, and run directly.
 
+## mac-vm
+
+A step that needs macOS itself (an iPhone simulator, a Mac app on screen, an Xcode build), from a CI job on a Nimbus
+runner (a Linux container): what isomer's and playground's `.github/actions/mac_vm` did in bash, after Nimbus' own
+`tools/ci/mac_vm_tests.sh`.
+
+```sh
+mac-vm --env ISOMER_PROOF=1 --out out/review --out out/junit.xml -- tools/ci/proof.sh --stage shoot --platform macos
+```
+
+- It makes an SSH key of its own, leases a macOS VM in the job's name (`nimbus job lease macos --config=xcode_27_2`,
+  60 minutes, the repository and job as its label), renews it every 10 minutes while the step runs, and releases it
+  however the step ends: done, failed, or stopped by SIGINT, SIGTERM or SIGHUP (a cancelled job), after which it ends
+  with 128 plus the signal. Nimbus lends two macOS VMs to everyone at once, so a job holds one for as little as it can.
+- The folder (`--folder`, the current one unless named: the job's checkout and what it downloaded) is copied in as a
+  tar, without `.bazelrc.user` (the runner's) and `.git` (`--git` keeps it: a quick proof reads the branch's history).
+- The command (the words after `--`, joined by spaces) runs in the VM's copy with `zsh -lc` (Homebrew's tools, Xcode)
+  in the VM's desktop session (`launchctl asuser`: a window can show, a simulator can boot; `--no-desktop` runs over
+  SSH alone), with each `--env NAME=VALUE` set.
+- Each `--out` path is copied back into the folder whatever the command returned, links followed; one it didn't make
+  is skipped with a warning.
+- The exit status is the command's (ssh's 255 when the VM couldn't be reached; 1 when the lease or the copy failed).
+- In a job with no network but Nimbus' proxy, the lease's `NIMBUS_SSH_PROXY_COMMAND` (Nimbus 0.25) takes ssh to the
+  VM, with `ServerAliveInterval` keeping a quiet connection open.
+- **No secret goes in.** Nimbus' VMs aren't network-locked, and `--env` values travel on ssh's command line (seen by
+  `ps` on the runner and in the VM), so `--env` is for settings, never keys. The tool prints no value of the lease's or
+  of `--env`.
+- The lease's label is the job's `GITHUB_REPOSITORY GITHUB_JOB` (`--label` names another), so Nimbus' lease list says
+  whose it is: a release job's lease reads `<owner>/<repository> release-apple`, say.
+- A signal stops the tool's own `ssh` or `tar` before the lease is released. One that lands during `nimbus job lease`
+  itself leaves that lease to end with its time.
+
 ## Pinned tools
 
 `sign` runs the repository's own pinned tools, never one it downloads. These are the versions it's tested with
