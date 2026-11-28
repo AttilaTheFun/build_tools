@@ -20,6 +20,9 @@ let package = Package(
         // Bazel in a CI container with Nimbus' settings for the runner: build, test, or package (the targets' files
         // copied into a folder). What each private repository's tools/ci/container_build.sh was.
         .executable(name: "ci-bazel", targets: ["ci-bazel"]),
+        // A step that needs macOS itself, from a CI job on a Nimbus runner: a leased macOS VM, the folder copied in, a
+        // command run in its desktop session, results copied back, the lease released however the step ends.
+        .executable(name: "mac-vm", targets: ["mac-vm"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
@@ -72,6 +75,16 @@ let package = Package(
             name: "ci-bazel",
             dependencies: ["BazelCIKit", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
         .testTarget(name: "BazelCIKitTests", dependencies: ["BazelCIKit"]),
+        .target(
+            name: "MacVMKit",
+            dependencies: [
+                .product(name: "Subprocess", package: "swift-subprocess"),
+                .product(name: "SystemPackage", package: "swift-system", condition: .when(platforms: [.linux])),
+            ]),
+        .executableTarget(
+            name: "mac-vm",
+            dependencies: ["MacVMKit", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
+        .testTarget(name: "MacVMKitTests", dependencies: ["MacVMKit"]),
     ],
     swiftLanguageModes: [.v6]
 )
